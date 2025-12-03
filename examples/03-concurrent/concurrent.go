@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourusername/skv"
+	"github.com/jncss/skv"
 )
 
 func main() {

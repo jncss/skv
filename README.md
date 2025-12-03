@@ -41,7 +41,7 @@ Each record is stored sequentially with the following binary structure:
 ## Installation
 
 ```bash
-go get github.com/yourusername/skv
+go get github.com/jncss/skv
 ```
 
 ## Quick Start
@@ -52,7 +52,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/yourusername/skv"
+    "github.com/jncss/skv"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/yourusername/skv"
+	"github.com/jncss/skv"
 )
 
 func main() {
