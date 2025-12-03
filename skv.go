@@ -39,6 +39,7 @@ type SKV struct {
 	cache    map[string]int64 // Cache: key -> file position
 	mu       sync.RWMutex     // Mutex for thread-safe operations
 	fileLock *flock.Flock     // Cross-platform file lock
+	lastSize int64            // Last known file size for detecting changes by other processes
 }
 
 // Open opens or creates a .skv file and returns an SKV object
@@ -67,6 +68,14 @@ func Open(name string) (*SKV, error) {
 		return nil, fmt.Errorf("error building cache: %w", err)
 	}
 
+	// Get initial file size
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("error getting file info: %w", err)
+	}
+	skv.lastSize = info.Size()
+
 	return skv, nil
 }
 
@@ -78,6 +87,30 @@ func (s *SKV) Close() error {
 	if s.file != nil {
 		return s.file.Close()
 	}
+	return nil
+}
+
+// checkAndRebuild checks if the file has changed size and rebuilds the cache if needed.
+// Called before each operation to detect changes made by other processes:
+// - Compact operations (file shrinks)
+// - Put/Update operations (file grows)
+// This ensures all processes stay synchronized automatically.
+func (s *SKV) checkAndRebuild() error {
+	info, err := s.file.Stat()
+	if err != nil {
+		return fmt.Errorf("error getting file info: %w", err)
+	}
+
+	currentSize := info.Size()
+	if currentSize != s.lastSize {
+		// File size changed - another process modified the database
+		// Rebuild cache to get updated key positions
+		if err := s.rebuildCache(); err != nil {
+			return fmt.Errorf("error rebuilding cache after file change: %w", err)
+		}
+		s.lastSize = currentSize
+	}
+
 	return nil
 }
 
@@ -102,9 +135,9 @@ func (s *SKV) CloseWithCompact() error {
 	return s.file.Close()
 }
 
-// writeRecord writes a complete record (type, key, data) to the end of the file
+// writeRecordAtPosition writes a complete record (type, key, data) at the current file position
 // Returns the position where the record was written
-func (s *SKV) writeRecord(key []byte, data []byte) (int64, error) {
+func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 	// Determine the type based on the data size
 	var recordType byte
 	dataSize := uint64(len(data))
@@ -120,13 +153,11 @@ func (s *SKV) writeRecord(key []byte, data []byte) (int64, error) {
 		recordType = Type8Bytes
 	}
 
-	// Move to the end of the file
-	if _, err := s.file.Seek(0, io.SeekEnd); err != nil {
-		return 0, fmt.Errorf("error seeking to end of file: %w", err)
-	}
-
 	// Save position before writing
-	recordPos, _ := s.file.Seek(0, io.SeekCurrent)
+	recordPos, err := s.file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, fmt.Errorf("error getting current position: %w", err)
+	}
 
 	// Write the type
 	if _, err := s.file.Write([]byte{recordType}); err != nil {
@@ -183,6 +214,17 @@ func (s *SKV) writeRecord(key []byte, data []byte) (int64, error) {
 	}
 
 	return recordPos, nil
+}
+
+// writeRecord writes a complete record (type, key, data) to the end of the file
+// Returns the position where the record was written
+func (s *SKV) writeRecord(key []byte, data []byte) (int64, error) {
+	// Move to the end of the file
+	if _, err := s.file.Seek(0, io.SeekEnd); err != nil {
+		return 0, fmt.Errorf("error seeking to end of file: %w", err)
+	}
+
+	return s.writeRecordAtPosition(key, data)
 }
 
 // readRecord reads a complete record from the current file position
@@ -277,6 +319,11 @@ func (s *SKV) Put(key []byte, data []byte) error {
 	}
 	defer s.fileLock.Unlock()
 
+	// Check if file changed and rebuild if needed
+	if err := s.checkAndRebuild(); err != nil {
+		return err
+	}
+
 	if len(key) == 0 {
 		return fmt.Errorf("key cannot be empty")
 	}
@@ -312,6 +359,11 @@ func (s *SKV) Update(key []byte, data []byte) error {
 		return fmt.Errorf("error acquiring write lock: %w", err)
 	}
 	defer s.fileLock.Unlock()
+
+	// Check if another process changed the file (Put/Update/Compact) and rebuild cache if needed
+	if err := s.checkAndRebuild(); err != nil {
+		return err
+	}
 
 	if len(key) == 0 {
 		return fmt.Errorf("key cannot be empty")
@@ -398,6 +450,11 @@ func (s *SKV) Get(key []byte) ([]byte, error) {
 	}
 	defer s.fileLock.Unlock()
 
+	// Check if another process changed the file (Put/Update/Compact) and rebuild cache if needed
+	if err := s.checkAndRebuild(); err != nil {
+		return nil, err
+	}
+
 	if len(key) == 0 {
 		return nil, fmt.Errorf("key cannot be empty")
 	}
@@ -432,6 +489,11 @@ func (s *SKV) Delete(key []byte) error {
 		return fmt.Errorf("error acquiring write lock: %w", err)
 	}
 	defer s.fileLock.Unlock()
+
+	// Check if another process changed the file (Put/Update/Compact) and rebuild cache if needed
+	if err := s.checkAndRebuild(); err != nil {
+		return err
+	}
 
 	return s.deleteInternal(key)
 }
@@ -550,6 +612,8 @@ func (s *SKV) Compact() error {
 
 // compactInternal is the internal implementation of Compact without locking
 // Used by CloseWithCompact to avoid deadlock
+// Performs in-place compaction without creating temporary files to avoid
+// invalidating file descriptors in other processes
 func (s *SKV) compactInternal() error {
 	// Collect all active keys and their data from cache
 	type keyData struct {
@@ -574,54 +638,42 @@ func (s *SKV) compactInternal() error {
 		activeData = append(activeData, keyData{key: key, data: data})
 	}
 
-	// Create new temporary file
-	tempPath := s.filePath + ".tmp"
-	tempFile, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("error creating temporary file: %w", err)
+	// Seek to beginning of file to rewrite from start
+	if _, err := s.file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("error seeking to beginning: %w", err)
 	}
-	defer tempFile.Close()
 
-	// Swap file to write to temp file
-	originalFile := s.file
-	s.file = tempFile
-
-	// Write all active records using writeRecord
+	// Write all active records in-place using writeRecordAtPosition
 	newCache := make(map[string]int64)
 	for _, kd := range activeData {
-		pos, err := s.writeRecord(kd.key, kd.data)
+		pos, err := s.writeRecordAtPosition(kd.key, kd.data)
 		if err != nil {
-			s.file = originalFile
 			return fmt.Errorf("error writing record: %w", err)
 		}
 		newCache[string(kd.key)] = pos
 	}
 
-	// Restore original file and close both
-	s.file = originalFile
-
-	if err := s.file.Close(); err != nil {
-		return fmt.Errorf("error closing original file: %w", err)
-	}
-	if err := tempFile.Close(); err != nil {
-		return fmt.Errorf("error closing temporary file: %w", err)
-	}
-
-	// Replace the original file with the temporary file
-	if err := os.Rename(tempPath, s.filePath); err != nil {
-		return fmt.Errorf("error replacing file: %w", err)
-	}
-
-	// Reopen the file
-	file, err := os.OpenFile(s.filePath, os.O_RDWR, 0644)
+	// Get current position (end of compacted data)
+	endPos, err := s.file.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return fmt.Errorf("error reopening file: %w", err)
+		return fmt.Errorf("error getting current position: %w", err)
 	}
 
-	s.file = file
+	// Truncate file to new size
+	if err := s.file.Truncate(endPos); err != nil {
+		return fmt.Errorf("error truncating file: %w", err)
+	}
+
+	// Sync to ensure all data is written
+	if err := s.file.Sync(); err != nil {
+		return fmt.Errorf("error syncing file: %w", err)
+	}
 
 	// Update cache with new positions
 	s.cache = newCache
+
+	// Update lastSize so other operations know the file changed
+	s.lastSize = endPos
 
 	return nil
 }
