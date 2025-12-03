@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
+
+	"github.com/gofrs/flock"
 )
 
 // Record type based on the size of the data field
@@ -34,6 +37,8 @@ type SKV struct {
 	file     *os.File
 	filePath string
 	cache    map[string]int64 // Cache: key -> file position
+	mu       sync.RWMutex     // Mutex for thread-safe operations
+	fileLock *flock.Flock     // Cross-platform file lock
 }
 
 // Open opens or creates a .skv file and returns an SKV object
@@ -53,6 +58,7 @@ func Open(name string) (*SKV, error) {
 		file:     file,
 		filePath: name,
 		cache:    make(map[string]int64),
+		fileLock: flock.New(name),
 	}
 
 	// Build cache by scanning the file
@@ -66,6 +72,9 @@ func Open(name string) (*SKV, error) {
 
 // Close closes the database file
 func (s *SKV) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.file != nil {
 		return s.file.Close()
 	}
@@ -75,12 +84,16 @@ func (s *SKV) Close() error {
 // CloseWithCompact compacts the database before closing to remove deleted records
 // This is useful to optimize the file size when closing the database
 func (s *SKV) CloseWithCompact() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.file == nil {
 		return nil
 	}
 
 	// Compact the database to remove deleted records
-	if err := s.Compact(); err != nil {
+	// Note: compactInternal is called without lock since we already have it
+	if err := s.compactInternal(); err != nil {
 		// Even if compact fails, try to close the file
 		s.file.Close()
 		return fmt.Errorf("error compacting before close: %w", err)
@@ -255,11 +268,20 @@ func (s *SKV) readRecord(readData bool) (recordType byte, key []byte, data []byt
 // Put stores a new key with its value
 // Returns ErrKeyExists if the key already exists
 func (s *SKV) Put(key []byte, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Acquire exclusive lock for write operation
+	if err := s.fileLock.Lock(); err != nil {
+		return fmt.Errorf("error acquiring write lock: %w", err)
+	}
+	defer s.fileLock.Unlock()
+
 	if len(key) == 0 {
 		return fmt.Errorf("key cannot be empty")
 	}
 	if len(key) > 255 {
-		return fmt.Errorf("key cannot be longer than 255 bytes")
+		return fmt.Errorf("key too long (max 255 bytes)")
 	}
 
 	// Check if the key already exists in cache
@@ -282,6 +304,15 @@ func (s *SKV) Put(key []byte, data []byte) error {
 // Update modifies the value of an existing key
 // Returns ErrKeyNotFound if the key doesn't exist
 func (s *SKV) Update(key []byte, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Acquire exclusive lock for write operation
+	if err := s.fileLock.Lock(); err != nil {
+		return fmt.Errorf("error acquiring write lock: %w", err)
+	}
+	defer s.fileLock.Unlock()
+
 	if len(key) == 0 {
 		return fmt.Errorf("key cannot be empty")
 	}
@@ -291,8 +322,8 @@ func (s *SKV) Update(key []byte, data []byte) error {
 		return ErrKeyNotFound
 	}
 
-	// Key exists, delete it first
-	if err := s.Delete(key); err != nil {
+	// Key exists, delete it first (internal version without lock)
+	if err := s.deleteInternal(key); err != nil {
 		return err
 	}
 
@@ -358,6 +389,15 @@ var ErrKeyExists = errors.New("key already exists")
 // Get retrieves the value associated with a key
 // Returns ErrKeyNotFound if the key doesn't exist or is deleted
 func (s *SKV) Get(key []byte) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Acquire shared lock for read operation (allows multiple readers)
+	if err := s.fileLock.RLock(); err != nil {
+		return nil, fmt.Errorf("error acquiring read lock: %w", err)
+	}
+	defer s.fileLock.Unlock()
+
 	if len(key) == 0 {
 		return nil, fmt.Errorf("key cannot be empty")
 	}
@@ -384,6 +424,21 @@ func (s *SKV) Get(key []byte) ([]byte, error) {
 
 // Delete deletes a key by setting the deleted bit in its record
 func (s *SKV) Delete(key []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Acquire exclusive lock for write operation
+	if err := s.fileLock.Lock(); err != nil {
+		return fmt.Errorf("error acquiring write lock: %w", err)
+	}
+	defer s.fileLock.Unlock()
+
+	return s.deleteInternal(key)
+}
+
+// deleteInternal is the internal implementation of Delete without locking
+// Used by Update to avoid deadlock
+func (s *SKV) deleteInternal(key []byte) error {
 	if len(key) == 0 {
 		return fmt.Errorf("key cannot be empty")
 	}
@@ -439,6 +494,15 @@ type Stats struct {
 
 // Verify checks the file integrity and returns statistics
 func (s *SKV) Verify() (*Stats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Acquire shared lock for read operation
+	if err := s.fileLock.RLock(); err != nil {
+		return nil, fmt.Errorf("error acquiring read lock: %w", err)
+	}
+	defer s.fileLock.Unlock()
+
 	stats := &Stats{}
 
 	// Move to the beginning of the file
@@ -472,6 +536,21 @@ func (s *SKV) Verify() (*Stats, error) {
 // Compact removes deleted records by creating a new file with only active records
 // For keys that appear multiple times, only the last occurrence is kept
 func (s *SKV) Compact() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Acquire exclusive lock for write operation
+	if err := s.fileLock.Lock(); err != nil {
+		return fmt.Errorf("error acquiring write lock: %w", err)
+	}
+	defer s.fileLock.Unlock()
+
+	return s.compactInternal()
+}
+
+// compactInternal is the internal implementation of Compact without locking
+// Used by CloseWithCompact to avoid deadlock
+func (s *SKV) compactInternal() error {
 	// Collect all active keys and their data from cache
 	type keyData struct {
 		key  []byte
@@ -520,6 +599,7 @@ func (s *SKV) Compact() error {
 
 	// Restore original file and close both
 	s.file = originalFile
+
 	if err := s.file.Close(); err != nil {
 		return fmt.Errorf("error closing original file: %w", err)
 	}
@@ -537,6 +617,7 @@ func (s *SKV) Compact() error {
 	if err != nil {
 		return fmt.Errorf("error reopening file: %w", err)
 	}
+
 	s.file = file
 
 	// Update cache with new positions
@@ -554,4 +635,269 @@ func (s *SKV) Keys() ([][]byte, error) {
 	}
 
 	return keys, nil
+}
+
+// String-based convenience functions
+
+// PutString stores a new key-value pair using strings
+func (s *SKV) PutString(key string, value string) error {
+	return s.Put([]byte(key), []byte(value))
+}
+
+// UpdateString updates an existing key with a new value using strings
+func (s *SKV) UpdateString(key string, value string) error {
+	return s.Update([]byte(key), []byte(value))
+}
+
+// GetString retrieves the value for a key using strings
+func (s *SKV) GetString(key string) (string, error) {
+	value, err := s.Get([]byte(key))
+	if err != nil {
+		return "", err
+	}
+	return string(value), nil
+}
+
+// DeleteString deletes a key using a string
+func (s *SKV) DeleteString(key string) error {
+	return s.Delete([]byte(key))
+}
+
+// KeysString returns a list of all active keys as strings
+func (s *SKV) KeysString() ([]string, error) {
+	keys := make([]string, 0, len(s.cache))
+	for keyStr := range s.cache {
+		keys = append(keys, keyStr)
+	}
+	return keys, nil
+}
+
+// Exists checks if a key exists in the database
+func (s *SKV) Exists(key []byte) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	_, exists := s.cache[string(key)]
+	return exists
+}
+
+// Has is an alias for Exists (more idiomatic name)
+func (s *SKV) Has(key []byte) bool {
+	return s.Exists(key)
+}
+
+// ExistsString checks if a key exists using a string
+func (s *SKV) ExistsString(key string) bool {
+	return s.Exists([]byte(key))
+}
+
+// HasString is an alias for ExistsString
+func (s *SKV) HasString(key string) bool {
+	return s.ExistsString(key)
+}
+
+// Count returns the number of active keys in the database
+func (s *SKV) Count() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return len(s.cache)
+}
+
+// Clear removes all keys from the database by truncating the file
+func (s *SKV) Clear() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Acquire exclusive lock for write operation
+	if err := s.fileLock.Lock(); err != nil {
+		return fmt.Errorf("error acquiring write lock: %w", err)
+	}
+	defer s.fileLock.Unlock()
+
+	// Truncate the file to 0 bytes
+	if err := s.file.Truncate(0); err != nil {
+		return fmt.Errorf("error truncating file: %w", err)
+	}
+
+	// Seek to the beginning
+	if _, err := s.file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("error seeking to start: %w", err)
+	}
+
+	// Clear the cache
+	s.cache = make(map[string]int64)
+
+	return nil
+}
+
+// GetOrDefault retrieves the value for a key, returning a default value if not found
+func (s *SKV) GetOrDefault(key []byte, defaultValue []byte) []byte {
+	value, err := s.Get(key)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+// GetOrDefaultString retrieves the value for a key as string, returning a default if not found
+func (s *SKV) GetOrDefaultString(key string, defaultValue string) string {
+	value, err := s.GetString(key)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+// ForEach iterates over all active keys and values in the database
+// The callback function receives each key-value pair
+// If the callback returns an error, iteration stops and the error is returned
+func (s *SKV) ForEach(fn func(key []byte, value []byte) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Acquire shared lock for read operation
+	if err := s.fileLock.RLock(); err != nil {
+		return fmt.Errorf("error acquiring read lock: %w", err)
+	}
+	defer s.fileLock.Unlock()
+
+	// Iterate over all cached keys
+	for _, position := range s.cache {
+		// Seek to the record position
+		if _, err := s.file.Seek(position, io.SeekStart); err != nil {
+			return fmt.Errorf("error seeking to position: %w", err)
+		}
+
+		// Read the record
+		_, key, data, err := s.readRecord(true)
+		if err != nil {
+			return fmt.Errorf("error reading record: %w", err)
+		}
+
+		// Call the callback function
+		if err := fn(key, data); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ForEachString iterates over all active keys and values as strings
+func (s *SKV) ForEachString(fn func(key string, value string) error) error {
+	return s.ForEach(func(key []byte, value []byte) error {
+		return fn(string(key), string(value))
+	})
+}
+
+// PutBatch stores multiple key-value pairs in a single operation
+// If any key already exists, the entire operation fails and returns ErrKeyExists
+func (s *SKV) PutBatch(items map[string][]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Acquire exclusive lock for write operation
+	if err := s.fileLock.Lock(); err != nil {
+		return fmt.Errorf("error acquiring write lock: %w", err)
+	}
+	defer s.fileLock.Unlock()
+
+	// Check if any key already exists
+	for key := range items {
+		if _, exists := s.cache[key]; exists {
+			return fmt.Errorf("key %q already exists: %w", key, ErrKeyExists)
+		}
+	}
+
+	// Write all records
+	for key, data := range items {
+		keyBytes := []byte(key)
+
+		if len(keyBytes) == 0 {
+			return fmt.Errorf("key cannot be empty")
+		}
+		if len(keyBytes) > 255 {
+			return fmt.Errorf("key %q too long (max 255 bytes)", key)
+		}
+
+		recordPos, err := s.writeRecord(keyBytes, data)
+		if err != nil {
+			return fmt.Errorf("error writing key %q: %w", key, err)
+		}
+
+		s.cache[key] = recordPos
+	}
+
+	return nil
+}
+
+// PutBatchString stores multiple key-value pairs using strings
+func (s *SKV) PutBatchString(items map[string]string) error {
+	byteItems := make(map[string][]byte, len(items))
+	for key, value := range items {
+		byteItems[key] = []byte(value)
+	}
+	return s.PutBatch(byteItems)
+}
+
+// GetBatch retrieves multiple keys at once
+// Returns a map with the values for existing keys
+// Missing keys are not included in the result map
+func (s *SKV) GetBatch(keys [][]byte) (map[string][]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Acquire shared lock for read operation
+	if err := s.fileLock.RLock(); err != nil {
+		return nil, fmt.Errorf("error acquiring read lock: %w", err)
+	}
+	defer s.fileLock.Unlock()
+
+	result := make(map[string][]byte, len(keys))
+
+	for _, key := range keys {
+		keyStr := string(key)
+		position, found := s.cache[keyStr]
+		if !found {
+			continue // Skip missing keys
+		}
+
+		// Seek to the record position
+		if _, err := s.file.Seek(position, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("error seeking to position: %w", err)
+		}
+
+		// Read the record
+		_, _, data, err := s.readRecord(true)
+		if err != nil {
+			return nil, fmt.Errorf("error reading record: %w", err)
+		}
+
+		result[keyStr] = data
+	}
+
+	return result, nil
+}
+
+// GetBatchString retrieves multiple keys using strings
+// Returns a map with the values for existing keys
+// Missing keys are not included in the result map
+func (s *SKV) GetBatchString(keys []string) (map[string]string, error) {
+	byteKeys := make([][]byte, len(keys))
+	for i, key := range keys {
+		byteKeys[i] = []byte(key)
+	}
+
+	byteResult, err := s.GetBatch(byteKeys)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]string, len(byteResult))
+	for key, value := range byteResult {
+		result[key] = string(value)
+	}
+
+	return result, nil
 }

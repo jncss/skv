@@ -7,6 +7,12 @@ A Go library for storing key/value data in a sequential binary file format.
 - **Sequential file format** - All writes are append-only for simplicity and reliability
 - **Binary encoding** - Efficient storage with variable-length data size fields
 - **In-memory cache** - Automatic caching of all keys for O(1) read performance
+- **Thread-safe** - All operations are protected with mutex locks for safe concurrent access
+- **File locking** - OS-level per-operation locks: shared locks for reads (allow concurrent readers), exclusive locks for writes (serialize writes)
+- **Cross-platform** - Works on Linux, macOS, BSD, and Windows
+- **String convenience functions** - Direct string operations without byte conversion
+- **Batch operations** - Efficiently insert or retrieve multiple keys at once
+- **Iterator support** - ForEach for processing all key-value pairs
 - **Soft deletes** - Deleted records are marked with a flag (bit 7) preserving original type
 - **Last-write-wins** - When a key is updated, the new value is appended; Get returns the last active occurrence
 - **Compact operation** - Remove deleted records and duplicate keys to reduce file size
@@ -55,56 +61,47 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    // Option 1: Normal close (fast)
     defer db.Close()
-    // Option 2: Close with compact to optimize file size
-    // defer func() { 
-    //     if err := db.CloseWithCompact(); err != nil {
-    //         log.Fatal(err)
-    //     }
-    // }()
 
-    // Store a key-value pair
-    if err := db.Put([]byte("username"), []byte("alice")); err != nil {
-        log.Fatal(err)
+    // Using string functions for convenience
+    db.PutString("username", "alice")
+    db.PutString("email", "alice@example.com")
+    
+    // Update existing key
+    db.UpdateString("username", "alice_smith")
+
+    // Get with default value
+    theme := db.GetOrDefaultString("theme", "dark")
+    fmt.Printf("Theme: %s\n", theme)
+
+    // Check if key exists
+    if db.HasString("username") {
+        name, _ := db.GetString("username")
+        fmt.Printf("Username: %s\n", name)
     }
 
-    // Update an existing key
-    if err := db.Update([]byte("username"), []byte("alice_smith")); err != nil {
-        log.Fatal(err)
+    // Batch operations
+    users := map[string]string{
+        "user1": "alice",
+        "user2": "bob",
+        "user3": "charlie",
     }
+    db.PutBatchString(users)
 
-    // Retrieve a value
-    value, err := db.Get([]byte("username"))
-    if err != nil {
-        log.Fatal(err)
+    // Iterate over all keys
+    db.ForEachString(func(key string, value string) error {
+        fmt.Printf("%s: %s\n", key, value)
+        return nil
+    })
+
+    // Get statistics
+    fmt.Printf("Total keys: %d\n", db.Count())
+
+    // Verify and compact if needed
+    stats, _ := db.Verify()
+    if stats.DeletedRecords > 100 {
+        db.Compact()
     }
-    fmt.Printf("username = %s\n", value)
-
-    // Delete a key
-    if err := db.Delete([]byte("username")); err != nil {
-        log.Fatal(err)
-    }
-
-    // List all keys
-    keys, err := db.Keys()
-    if err != nil {
-        log.Fatal(err)
-    }
-    fmt.Printf("Active keys: %v\n", keys)
-
-    // Verify database integrity and get statistics
-    stats, err := db.Verify()
-    if err != nil {
-        log.Fatal(err)
-    }
-    fmt.Printf("Total: %d, Active: %d, Deleted: %d\n", 
-        stats.TotalRecords, stats.ActiveRecords, stats.DeletedRecords)
-
-    // Manual compact (alternative to CloseWithCompact)
-    // if err := db.Compact(); err != nil {
-    //     log.Fatal(err)
-    // }
 }
 ```
 
@@ -235,6 +232,111 @@ err := db.Compact()
 // After: 60 total records (60 active, 0 deleted)
 ```
 
+### `Exists(key []byte) bool`
+Checks if a key exists in the database without retrieving its value.
+
+**Performance:** O(1) - uses in-memory cache.
+
+**Example:**
+```go
+if db.Exists([]byte("username")) {
+    fmt.Println("User exists")
+}
+```
+
+### `Has(key []byte) bool`
+Alias for `Exists()` with a more idiomatic name.
+
+### `Count() int`
+Returns the number of active keys in the database.
+
+**Performance:** O(1) - returns cache size.
+
+**Example:**
+```go
+count := db.Count()
+fmt.Printf("Database has %d keys\n", count)
+```
+
+### `Clear() error`
+Removes all keys from the database by truncating the file and clearing the cache.
+
+**Example:**
+```go
+if err := db.Clear(); err != nil {
+    log.Fatal(err)
+}
+```
+
+### `GetOrDefault(key []byte, defaultValue []byte) []byte`
+Retrieves a value, returning a default if the key doesn't exist. Never returns an error.
+
+**Example:**
+```go
+value := db.GetOrDefault([]byte("theme"), []byte("dark"))
+fmt.Printf("Theme: %s\n", value)
+```
+
+### `ForEach(fn func(key []byte, value []byte) error) error`
+Iterates over all active keys and values in the database. If the callback function returns an error, iteration stops.
+
+**Example:**
+```go
+err := db.ForEach(func(key []byte, value []byte) error {
+    fmt.Printf("%s: %s\n", key, value)
+    return nil
+})
+```
+
+### `PutBatch(items map[string][]byte) error`
+Stores multiple key-value pairs in a single operation. If any key already exists, the entire operation fails atomically.
+
+**Example:**
+```go
+items := map[string][]byte{
+    "user1": []byte("alice"),
+    "user2": []byte("bob"),
+    "user3": []byte("charlie"),
+}
+if err := db.PutBatch(items); err != nil {
+    log.Fatal(err)
+}
+```
+
+### `GetBatch(keys [][]byte) (map[string][]byte, error)`
+Retrieves multiple keys at once. Missing keys are excluded from the result.
+
+**Example:**
+```go
+keys := [][]byte{[]byte("user1"), []byte("user2")}
+results, err := db.GetBatch(keys)
+for key, value := range results {
+    fmt.Printf("%s: %s\n", key, value)
+}
+```
+
+### String Convenience Functions
+
+For easier string handling, the library provides string versions of all operations:
+
+- `PutString(key string, value string) error`
+- `UpdateString(key string, value string) error`
+- `GetString(key string) (string, error)`
+- `DeleteString(key string) error`
+- `KeysString() ([]string, error)`
+- `ExistsString(key string) bool` / `HasString(key string) bool`
+- `GetOrDefaultString(key string, defaultValue string) string`
+- `ForEachString(fn func(key string, value string) error) error`
+- `PutBatchString(items map[string]string) error`
+- `GetBatchString(keys []string) (map[string]string, error)`
+
+**Example:**
+```go
+db.PutString("username", "alice")
+name, _ := db.GetString("username")
+db.UpdateString("username", "alice_smith")
+```
+
 ## Error Handling
 
 The library defines the following errors:
@@ -246,6 +348,7 @@ The library defines the following errors:
 
 ### Inserts vs Updates
 - **`Put()`** only creates new keys. If the key already exists, it returns `ErrKeyExists`.
+
 - **`Update()`** only modifies existing keys. If the key doesn't exist, it returns `ErrKeyNotFound`.
 - This design prevents accidental overwrites and makes the intent explicit.
 
@@ -275,27 +378,80 @@ The library maintains an in-memory cache of all active keys for optimal read per
 
 **Trade-off:** All active keys are kept in memory. Memory usage is approximately: `(average_key_size + 8) * number_of_keys`. For example, with 1 million keys of average 20 bytes each, the cache would use approximately 28 MB of RAM.
 
+## Thread Safety
+
+The library provides two levels of concurrency protection:
+
+### Goroutine-level (within a single process)
+All public methods are thread-safe and can be safely called from multiple goroutines concurrently:
+
+- **Mutex protection**: Read and write operations are protected with `sync.RWMutex`
+- **Safe concurrent access**: Multiple goroutines can safely perform operations on the same SKV instance
+- **No external locking needed**: The library handles all synchronization internally
+
+**Concurrency characteristics:**
+- `Keys()` uses read lock (RLock) - allows concurrent reads of the cache
+- `Get()`, `Put()`, `Update()`, `Delete()`, `Compact()`, `Verify()` use exclusive lock - serialized for safety
+- File operations (seek/read/write) are protected to prevent race conditions
+
+### Process-level (multiple processes)
+File-level locks coordinate access between different processes:
+
+- **Shared locks (LOCK_SH)**: Multiple processes can read concurrently (`Get()`, `Verify()`)
+- **Exclusive locks (LOCK_EX)**: Only one process can write at a time (`Put()`, `Update()`, `Delete()`, `Compact()`)
+- **Automatic coordination**: Locks acquired per-operation, released automatically
+
+**Testing:** All operations have been tested with Go's race detector (`go test -race`) to ensure thread safety.
+
+## File Locking
+
+The library uses OS-level file locking to coordinate access between multiple processes:
+
+- **Per-operation locking**: Locks are acquired at the start of each operation and released when complete
+- **Shared locks (LOCK_SH)**: Used for read operations (`Get()`, `Verify()`) - multiple processes can read simultaneously
+- **Exclusive locks (LOCK_EX)**: Used for write operations (`Put()`, `Update()`, `Delete()`, `Compact()`) - only one process can write at a time
+- **Process coordination**: Prevents data corruption while allowing concurrent reads from multiple processes
+- **Automatic management**: All locking is handled internally - no manual lock management needed
+
+**Behavior:**
+- Multiple processes can open the same database file simultaneously
+- Read operations can proceed concurrently from different processes
+- Write operations are serialized - if one process is writing, others wait
+- Locks are held only during the operation, not across the entire database lifetime
+- If a process crashes during an operation, the OS automatically releases the lock
+
+**Platform support:** File locking uses `github.com/gofrs/flock` which provides cross-platform support for Unix-like systems (Linux, macOS, BSD) and Windows.
+
 ## Testing
 
 Run the test suite:
 
 ```bash
 go test -v
+
+# With race detector
+go test -v -race
 ```
 
-All 23 tests cover:
-- File opening and creation
-- Put operations (including duplicate key prevention)
-- Update operations
-- Get operations
-- Different data types (1-byte, 2-byte, 4-byte size fields)
-- Delete operations
-- Update scenarios
-- Verify functionality
-- Compact operations
-- Keys listing
-- Cache performance (1000+ key operations)
-- Cache rebuild after compaction
+All 57 tests cover:
+- **Basic operations**: File opening, Put, Update, Get, Delete
+- **String functions**: All string convenience methods
+- **Extended operations**: Exists/Has, Count, Clear, GetOrDefault
+- **Batch operations**: PutBatch, GetBatch (both bytes and strings)
+- **Iterator**: ForEach and ForEachString
+- **Data types**: Different size fields (1-byte, 2-byte, 4-byte)
+- **Cache**: Performance tests, rebuild after compaction
+- **Concurrency**: Reads, writes, mixed operations, concurrent compact
+- **File locking**: Per-operation locks, concurrent access from multiple processes
+- **Integrity**: Verify functionality, compact operations
+- **Edge cases**: Duplicate key prevention, missing keys, delete and re-add
+- **Concurrent read/write** (mixed operations)
+- **Concurrent compact** (compact while reading/writing)
+- **Concurrent Keys()** calls
+- **File locking** (per-operation locks, concurrent access from multiple processes)
+- **Lock release** (automatic on operation completion)
+- **Concurrent process access** (multiple processes reading simultaneously)
+- **Crash simulation** (lock release on process termination)
 
 ## Performance Considerations
 
