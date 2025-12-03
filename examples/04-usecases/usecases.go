@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/yourusername/skv"
+	"github.com/jncss/skv"
 )
 
 // User represents a user object

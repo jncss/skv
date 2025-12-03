@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/yourusername/skv"
+	"github.com/jncss/skv"
 )
 
 func printFileSize(filename string) {
