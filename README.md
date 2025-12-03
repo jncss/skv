@@ -6,6 +6,7 @@ A Go library for storing key/value data in a sequential binary file format.
 
 - **Sequential file format** - All writes are append-only for simplicity and reliability
 - **Binary encoding** - Efficient storage with variable-length data size fields
+- **In-memory cache** - Automatic caching of all keys for O(1) read performance
 - **Soft deletes** - Deleted records are marked with a flag (bit 7) preserving original type
 - **Last-write-wins** - When a key is updated, the new value is appended; Get returns the last active occurrence
 - **Compact operation** - Remove deleted records and duplicate keys to reduce file size
@@ -54,7 +55,14 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
+    // Option 1: Normal close (fast)
     defer db.Close()
+    // Option 2: Close with compact to optimize file size
+    // defer func() { 
+    //     if err := db.CloseWithCompact(); err != nil {
+    //         log.Fatal(err)
+    //     }
+    // }()
 
     // Store a key-value pair
     if err := db.Put([]byte("username"), []byte("alice")); err != nil {
@@ -93,10 +101,10 @@ func main() {
     fmt.Printf("Total: %d, Active: %d, Deleted: %d\n", 
         stats.TotalRecords, stats.ActiveRecords, stats.DeletedRecords)
 
-    // Compact the database (remove deleted records)
-    if err := db.Compact(); err != nil {
-        log.Fatal(err)
-    }
+    // Manual compact (alternative to CloseWithCompact)
+    // if err := db.Compact(); err != nil {
+    //     log.Fatal(err)
+    // }
 }
 ```
 
@@ -111,7 +119,25 @@ db, err := skv.Open("mydata")  // Creates/opens mydata.skv
 ```
 
 ### `Close() error`
-Closes the database file.
+Closes the database file without compaction.
+
+**Example:**
+```go
+defer db.Close()
+```
+
+### `CloseWithCompact() error`
+Compacts the database (removes deleted records and old versions) before closing. This is useful to optimize file size when closing the database, especially for long-running applications that accumulate many updates and deletes.
+
+**Example:**
+```go
+// Optimize file size on close
+if err := db.CloseWithCompact(); err != nil {
+    log.Fatal(err)
+}
+```
+
+**Note:** Use `Close()` for faster shutdown, or `CloseWithCompact()` to optimize file size at the cost of additional processing time during shutdown.
 
 ### `Put(key []byte, data []byte) error`
 Stores a new key-value pair. Returns `ErrKeyExists` if the key already exists. To modify an existing key, use `Update()` instead.
@@ -148,6 +174,8 @@ if err == skv.ErrKeyNotFound {
 ### `Get(key []byte) ([]byte, error)`
 Retrieves the value for a given key. Returns `ErrKeyNotFound` if the key doesn't exist or has been deleted.
 
+**Performance:** O(1) lookup using in-memory cache.
+
 **Example:**
 ```go
 value, err := db.Get([]byte("name"))
@@ -157,7 +185,9 @@ if err == skv.ErrKeyNotFound {
 ```
 
 ### `Delete(key []byte) error`
-Marks a key as deleted by setting bit 7 of the type field on the last occurrence. Returns `ErrKeyNotFound` if the key doesn't exist.
+Marks a key as deleted by setting bit 7 of the type field on the last occurrence. Returns `ErrKeyNotFound` if the key doesn't exist. The key is also removed from the in-memory cache.
+
+**Performance:** O(1) cache lookup to locate the key.
 
 **Example:**
 ```go
@@ -166,6 +196,8 @@ err := db.Delete([]byte("name"))
 
 ### `Keys() ([][]byte, error)`
 Returns a list of all active keys in the database. Deleted keys and old versions of updated keys are excluded.
+
+**Performance:** O(1) - returns keys directly from the in-memory cache.
 
 **Example:**
 ```go
@@ -194,7 +226,7 @@ fmt.Printf("Database has %d active records\n", stats.ActiveRecords)
 ```
 
 ### `Compact() error`
-Creates a new file containing only the last active occurrence of each key, then replaces the original file. This removes all deleted records and old versions of updated keys.
+Creates a new file containing only the last active occurrence of each key, then replaces the original file. This removes all deleted records and old versions of updated keys. The in-memory cache is automatically rebuilt after compaction.
 
 **Example:**
 ```go
@@ -227,10 +259,21 @@ When you delete a key with `Delete`, the record is **not** removed from the file
 
 To permanently remove deleted records, call `Compact()`.
 
-### File Scanning
-Operations like `Get`, `Delete`, `Keys`, and `Verify` scan the entire file sequentially from start to end. For large databases with many records, consider:
-- Running `Compact()` periodically to reduce file size
-- Using appropriate key naming schemes for your access patterns
+### In-Memory Cache
+The library maintains an in-memory cache of all active keys for optimal read performance:
+
+- **Cache building:** Automatically built when opening the database (skips reading data values for efficiency)
+- **Cache updates:** Automatically maintained on all write operations (Put, Update, Delete)
+- **Cache rebuild:** Automatically rebuilt after `Compact()` operations (skips reading data values for efficiency)
+- **Memory usage:** Each cached key stores only its file position (8 bytes per key), not the data value
+
+**Benefits:**
+- `Get()` operations are O(1) instead of O(n)
+- `Delete()` operations are O(1) for key lookups
+- `Keys()` operations are O(1) instead of O(n)
+- Low memory overhead: only key strings and positions are cached, not the actual data values
+
+**Trade-off:** All active keys are kept in memory. Memory usage is approximately: `(average_key_size + 8) * number_of_keys`. For example, with 1 million keys of average 20 bytes each, the cache would use approximately 28 MB of RAM.
 
 ## Testing
 
@@ -240,7 +283,7 @@ Run the test suite:
 go test -v
 ```
 
-All 21 tests cover:
+All 23 tests cover:
 - File opening and creation
 - Put operations (including duplicate key prevention)
 - Update operations
@@ -251,19 +294,27 @@ All 21 tests cover:
 - Verify functionality
 - Compact operations
 - Keys listing
+- Cache performance (1000+ key operations)
+- Cache rebuild after compaction
 
 ## Performance Considerations
 
 - **Sequential writes** are very fast (append-only)
-- **Reads** require scanning the entire file (O(n) where n = number of records)
+- **Reads** are O(1) thanks to the in-memory cache
 - **Updates** create duplicate keys until `Compact()` is called
-- **Deletes** are fast (just set a bit) but don't reclaim space until `Compact()`
+- **Deletes** are O(1) for key lookups (cache) + O(1) for marking deleted
+- **Keys listing** is O(1) using the cache
+- **Memory usage:** Only key strings and file positions are cached (approximately 8 bytes overhead per key)
 
 This library is best suited for:
-- Small to medium datasets (thousands to hundreds of thousands of records)
-- Write-heavy workloads
-- Scenarios where simplicity and reliability are more important than read performance
+- Small to large datasets where all keys can fit in memory
+- Read-heavy workloads (thanks to O(1) cache lookups)
+- Write-heavy workloads (append-only is very fast)
+- Scenarios where simplicity and reliability are important
 - Applications that can periodically compact the database during low-traffic periods
+- Use cases with large data values (since values are not cached, only their positions)
+
+**Cache benefits:** The in-memory cache dramatically improves read performance compared to sequential file scanning. For databases with thousands or millions of keys, Get/Delete/Keys operations are instant. The cache stores only positions, not data values, making it memory-efficient even for databases with very large values.
 
 ## License
 
