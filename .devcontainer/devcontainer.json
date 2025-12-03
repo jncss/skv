@@ -1,0 +1,36 @@
+{
+    "name": "DevCon",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "containerEnv": {
+        "TZ": "Europe/Madrid"
+    },
+    "runArgs": [
+        "--add-host=git.systembcn.com:10.1.1.32"
+    ],
+    "features": {
+        "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {},
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "installZsh": false,
+            "userUid": "automatic",
+            "userGid": "automatic"
+        }
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "emmanuelbeziat.vscode-great-icons",
+                "golang.go",
+                "vue.volar",
+                "ms-azuretools.vscode-containers",
+                "ms-vscode.hexeditor",
+                "shakram02.bash-beautify",
+                "tamasfe.even-better-toml",
+                "shakram02.bash-beautify",
+                "chouzz.vscode-innosetup",
+                "alefragnani.pascal"
+            ]
+        }
+    }
+}
