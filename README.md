@@ -8,8 +8,10 @@ A Go library for storing key/value data in a sequential binary file format.
 - **Binary encoding** - Efficient storage with variable-length data size fields
 - **In-memory cache** - Automatic caching of all keys for O(1) read performance
 - **Thread-safe** - All operations are protected with mutex locks for safe concurrent access
+- **Multi-process safe** - Automatic change detection and cache rebuilding when another process compacts
 - **File locking** - OS-level per-operation locks: shared locks for reads (allow concurrent readers), exclusive locks for writes (serialize writes)
 - **Cross-platform** - Works on Linux, macOS, BSD, and Windows
+- **In-place compaction** - Safe compact operation that doesn't invalidate file descriptors in other processes
 - **String convenience functions** - Direct string operations without byte conversion
 - **Batch operations** - Efficiently insert or retrieve multiple keys at once
 - **Iterator support** - ForEach for processing all key-value pairs
@@ -422,6 +424,77 @@ The library uses OS-level file locking to coordinate access between multiple pro
 
 **Platform support:** File locking uses `github.com/gofrs/flock` which provides cross-platform support for Unix-like systems (Linux, macOS, BSD) and Windows.
 
+## Multi-Process Safety and Compact Operation
+
+The library is designed to safely handle concurrent access from multiple processes. A special change detection mechanism ensures that all processes stay synchronized when the database file is compacted.
+
+### How Compact Works with Multiple Processes
+
+When `Compact()` is called:
+
+1. **Exclusive lock acquired**: The compacting process holds an exclusive lock, temporarily blocking all other operations
+2. **In-place compaction**: Active records are rewritten from the beginning of the file (no temporary file created)
+3. **File truncation**: The file is truncated to the new, smaller size
+4. **File size changes**: Other processes detect this size change automatically
+
+### Automatic Change Detection
+
+Each database connection tracks the file size. When any operation is performed (Get, Put, Update, Delete):
+
+1. **Size check**: The operation first checks if the file size has changed
+2. **Auto-rebuild**: If changed, the in-memory cache is automatically rebuilt from the file
+3. **Operation proceeds**: The operation continues with the updated cache
+
+This mechanism ensures:
+- **No file descriptor invalidation**: Unlike temporary file approaches, file descriptors remain valid
+- **Transparent recovery**: Processes automatically adapt to changes without manual intervention
+- **Consistency**: All processes see the same data after any size-changing operation (Put, Update, Compact)
+- **No crashes**: Processes don't fail when another process modifies the database
+- **Automatic synchronization**: When one process adds/updates keys, others detect it and update their cache
+
+### Multi-Process Best Practices
+
+For optimal performance with multiple processes:
+
+- **Coordinate compacts**: Have only one designated process compact during off-peak hours
+- **Expect brief pauses**: Other processes may pause briefly when compact holds exclusive lock
+- **Monitor file size**: Compact when `Verify()` shows many deleted records
+- **Use read-heavy patterns**: Multiple concurrent readers work efficiently together
+
+**Example scenario:**
+```go
+// Process A: Web server handling read requests
+dbReader, _ := skv.Open("app.skv")
+defer dbReader.Close()
+dbReader.Get([]byte("config"))  // Fast concurrent reads
+
+// Process B: Background worker updating data
+dbWriter, _ := skv.Open("app.skv")
+defer dbWriter.Close()
+dbWriter.Update([]byte("stats"), newValue)  // Writes are serialized
+
+// Process C: Maintenance task (runs nightly)
+dbMaint, _ := skv.Open("app.skv")
+stats, _ := dbMaint.Verify()
+if stats.DeletedRecords > 1000 {
+    dbMaint.Compact()  // Other processes auto-detect and rebuild cache
+}
+dbMaint.Close()
+```
+
+### Technical Details
+
+- **lastSize field**: Each SKV instance tracks the last known file size
+- **checkAndRebuild()**: Called at the start of each operation to detect any file size changes
+- **Detects all modifications**: Put/Update operations (file grows) and Compact (file shrinks)
+- **In-place strategy**: Compact rewrites from position 0, avoiding temporary files
+- **File always valid**: During compact, the file is never in an invalid state
+- **Cross-platform**: Works on all platforms supported by gofrs/flock
+
+**Note:** Delete operations don't change file size (only set a deleted bit), so they're not detected until the next Compact. However, file locking ensures consistency.
+
+**Testing:** All multi-process scenarios have been tested with Go's race detector (`go test -race`) to ensure safety.
+
 ## Testing
 
 Run the test suite:
@@ -433,7 +506,7 @@ go test -v
 go test -v -race
 ```
 
-All 57 tests cover:
+All 60 tests cover:
 - **Basic operations**: File opening, Put, Update, Get, Delete
 - **String functions**: All string convenience methods
 - **Extended operations**: Exists/Has, Count, Clear, GetOrDefault
@@ -442,6 +515,7 @@ All 57 tests cover:
 - **Data types**: Different size fields (1-byte, 2-byte, 4-byte)
 - **Cache**: Performance tests, rebuild after compaction
 - **Concurrency**: Reads, writes, mixed operations, concurrent compact
+- **Multi-process**: Compact detection, cache rebuild, concurrent process access
 - **File locking**: Per-operation locks, concurrent access from multiple processes
 - **Integrity**: Verify functionality, compact operations
 - **Edge cases**: Duplicate key prevention, missing keys, delete and re-add
@@ -452,6 +526,7 @@ All 57 tests cover:
 - **Lock release** (automatic on operation completion)
 - **Concurrent process access** (multiple processes reading simultaneously)
 - **Crash simulation** (lock release on process termination)
+- **Change detection** (automatic cache rebuild when file changes)
 
 ## Performance Considerations
 
