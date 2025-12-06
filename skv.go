@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"unicode/utf8"
 )
@@ -903,6 +904,16 @@ func (s *SKV) Compact() error {
 
 // compactInternal is the internal implementation of Compact without locking
 // Used by CloseWithCompact to avoid deadlock
+//
+// This function uses a safe atomic approach:
+// 1. Write compacted data to a temporary file
+// 2. Sync the temporary file to disk
+// 3. Close the original file
+// 4. Atomically rename temp file over original (OS atomic operation)
+// 5. Reopen the file
+//
+// This ensures that if there's any failure during compaction, the original
+// file remains intact and no data is lost.
 func (s *SKV) compactInternal() error {
 	// Collect all active keys and their data from cache
 	type keyData struct {
@@ -927,41 +938,148 @@ func (s *SKV) compactInternal() error {
 		activeData = append(activeData, keyData{key: key, data: data})
 	}
 
-	// Seek to beginning of file
-	if _, err := s.file.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("error seeking to beginning: %w", err)
+	// Create temporary file in the same directory as the database
+	// (important for atomic rename to work on all platforms)
+	tmpFile, err := os.CreateTemp(filepath.Dir(s.filePath), ".skv-compact-*.tmp")
+	if err != nil {
+		return fmt.Errorf("error creating temporary file: %w", err)
+	}
+	tmpFilename := tmpFile.Name()
+
+	// Ensure temp file is cleaned up on error
+	defer func() {
+		// Only remove if it still exists (won't exist after successful rename)
+		if _, err := os.Stat(tmpFilename); err == nil {
+			os.Remove(tmpFilename)
+		}
+	}()
+
+	// Write header to temp file
+	header := make([]byte, HeaderSize)
+	copy(header[0:3], HeaderMagic)
+	header[3] = byte(VersionMajor)
+	header[4] = byte(VersionMinor)
+	header[5] = byte(VersionPatch)
+	if _, err := tmpFile.Write(header); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("error writing header to temp file: %w", err)
 	}
 
-	// Write header first
-	if err := s.writeHeader(); err != nil {
-		return fmt.Errorf("error writing header: %w", err)
-	}
-
-	// Write all active records in-place using writeRecordAtPosition
+	// Write all active records to temp file using the correct SKV format
 	newCache := make(map[string]int64)
 	for _, kd := range activeData {
-		pos, err := s.writeRecordAtPosition(kd.key, kd.data)
+		// Get current position in temp file (this is the record position)
+		pos, err := tmpFile.Seek(0, io.SeekCurrent)
 		if err != nil {
-			return fmt.Errorf("error writing record: %w", err)
+			tmpFile.Close()
+			return fmt.Errorf("error getting position in temp file: %w", err)
 		}
+
+		// Determine the type based on the data size
+		var recordType byte
+		dataSize := uint64(len(kd.data))
+
+		switch {
+		case dataSize <= 0xFF: // 255 bytes
+			recordType = Type1Byte
+		case dataSize <= 0xFFFF: // 64KB
+			recordType = Type2Bytes
+		case dataSize <= 0xFFFFFFFF: // 4GB
+			recordType = Type4Bytes
+		default:
+			recordType = Type8Bytes
+		}
+
+		// Write the type
+		if _, err := tmpFile.Write([]byte{recordType}); err != nil {
+			tmpFile.Close()
+			return fmt.Errorf("error writing type to temp file: %w", err)
+		}
+
+		// Write the key size
+		keySize := byte(len(kd.key))
+		if _, err := tmpFile.Write([]byte{keySize}); err != nil {
+			tmpFile.Close()
+			return fmt.Errorf("error writing key size to temp file: %w", err)
+		}
+
+		// Write the key
+		if _, err := tmpFile.Write(kd.key); err != nil {
+			tmpFile.Close()
+			return fmt.Errorf("error writing key to temp file: %w", err)
+		}
+
+		// Write the data size according to the type
+		switch recordType {
+		case Type1Byte:
+			if _, err := tmpFile.Write([]byte{byte(dataSize)}); err != nil {
+				tmpFile.Close()
+				return fmt.Errorf("error writing data size to temp file: %w", err)
+			}
+		case Type2Bytes:
+			buf := make([]byte, 2)
+			binary.LittleEndian.PutUint16(buf, uint16(dataSize))
+			if _, err := tmpFile.Write(buf); err != nil {
+				tmpFile.Close()
+				return fmt.Errorf("error writing data size to temp file: %w", err)
+			}
+		case Type4Bytes:
+			buf := make([]byte, 4)
+			binary.LittleEndian.PutUint32(buf, uint32(dataSize))
+			if _, err := tmpFile.Write(buf); err != nil {
+				tmpFile.Close()
+				return fmt.Errorf("error writing data size to temp file: %w", err)
+			}
+		case Type8Bytes:
+			buf := make([]byte, 8)
+			binary.LittleEndian.PutUint64(buf, dataSize)
+			if _, err := tmpFile.Write(buf); err != nil {
+				tmpFile.Close()
+				return fmt.Errorf("error writing data size to temp file: %w", err)
+			}
+		}
+
+		// Write the data
+		if _, err := tmpFile.Write(kd.data); err != nil {
+			tmpFile.Close()
+			return fmt.Errorf("error writing data to temp file: %w", err)
+		}
+
 		newCache[string(kd.key)] = pos
 	}
 
-	// Get current position (end of compacted data)
-	endPos, err := s.file.Seek(0, io.SeekCurrent)
+	// Sync temp file to ensure all data is written to disk
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("error syncing temp file: %w", err)
+	}
+
+	// Close temp file
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("error closing temp file: %w", err)
+	}
+
+	// Close original file
+	if err := s.file.Close(); err != nil {
+		return fmt.Errorf("error closing original file: %w", err)
+	}
+
+	// Atomically rename temp file over original
+	// This is an atomic operation on all major platforms
+	if err := os.Rename(tmpFilename, s.filePath); err != nil {
+		// Critical error: try to reopen original file
+		if f, reopenErr := os.OpenFile(s.filePath, os.O_RDWR, 0644); reopenErr == nil {
+			s.file = f
+		}
+		return fmt.Errorf("error renaming temp file (original file may still be intact): %w", err)
+	}
+
+	// Reopen the file
+	f, err := os.OpenFile(s.filePath, os.O_RDWR, 0644)
 	if err != nil {
-		return fmt.Errorf("error getting current position: %w", err)
+		return fmt.Errorf("error reopening file after compact: %w", err)
 	}
-
-	// Truncate file to new size
-	if err := s.file.Truncate(endPos); err != nil {
-		return fmt.Errorf("error truncating file: %w", err)
-	}
-
-	// Sync to ensure all data is written
-	if err := s.file.Sync(); err != nil {
-		return fmt.Errorf("error syncing file: %w", err)
-	}
+	s.file = f
 
 	// Update cache with new positions
 	s.cache = newCache

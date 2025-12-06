@@ -3,8 +3,8 @@
 A Go library for storing key/value data in a sequential binary file format.
 
 [![Production Ready](https://img.shields.io/badge/production-ready-green.svg)](https://github.com/jncss/skv)
-[![Test Coverage](https://img.shields.io/badge/coverage-80.8%25-brightgreen.svg)](https://github.com/jncss/skv)
-[![Tests Passing](https://img.shields.io/badge/tests-122%20passing-brightgreen.svg)](https://github.com/jncss/skv)
+[![Test Coverage](https://img.shields.io/badge/coverage-78.2%25-green.svg)](https://github.com/jncss/skv)
+[![Tests Passing](https://img.shields.io/badge/tests-142%20passing-brightgreen.svg)](https://github.com/jncss/skv)
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
 **Performance Metrics:**
@@ -13,7 +13,7 @@ A Go library for storing key/value data in a sequential binary file format.
 - 🔄 **365 updates/sec** - With automatic space reuse
 - 🧵 **1,900 ops/sec** - Concurrent operations (10 goroutines, race-free)
 - 📦 **37% reduction** - Average compaction savings
-- ✅ **122 tests** - All passing (comprehensive coverage including streaming)
+- ✅ **142 tests** - All passing (comprehensive coverage including streaming and safety)
 
 ## Features
 
@@ -344,7 +344,16 @@ if stats.WastedPercent > 30.0 {
 ```
 
 ### `Compact() error`
-Creates a new file containing only the last active occurrence of each key, then replaces the original file. This removes all deleted records and old versions of updated keys. The in-memory cache is automatically rebuilt after compaction.
+Creates a new file containing only the last active occurrence of each key, then atomically replaces the original file. This removes all deleted records and old versions of updated keys. The in-memory cache is automatically rebuilt after compaction.
+
+**Safety:** Uses atomic file operations with a temporary file to ensure data integrity:
+1. Writes compacted data to a temporary file
+2. Syncs the temporary file to disk
+3. Closes the original file
+4. Atomically renames the temporary file over the original (OS-level atomic operation)
+5. Reopens the database file
+
+This approach ensures that if compaction fails at any point (power loss, disk full, etc.), the original database file remains intact and uncorrupted.
 
 **Example:**
 ```go

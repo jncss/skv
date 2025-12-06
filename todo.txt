@@ -1,0 +1,5 @@
+En l'eina 'cli' skv, els valors/claus binaries que surtin en hexa. porser opcional?
+Eina de 'cli' recuperació, cal afegir algun byte de marca de registre per facilitar un 'recover'?
+Multiples claus
+Dades xifrades
+Demanar opinió del projecte a altres IA's
