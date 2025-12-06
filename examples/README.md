@@ -1,196 +1,215 @@
 # SKV Examples
 
-This directory contains practical examples demonstrating various features and use cases of the SKV library.
+Comprehensive examples demonstrating all features of SKV with up-to-date code and best practices.
 
-## Directory Structure
+## 📚 Examples Overview
 
-```
-examples/
-├── 01-basics/          # Basic operations and getting started
-├── 02-advanced/        # Advanced features and optimization
-├── 03-concurrent/      # Concurrency and thread-safety
-├── 04-usecases/        # Real-world use cases
-├── 05-backup/          # Backup and restore operations
-└── 06-fileformat/      # File format and header information
-```
+### [01-basics](01-basics/) - Fundamental Operations
+Learn the core CRUD operations and error handling.
 
-## Running Examples
+**Examples:**
+- `basic_usage/` - Put, Get, Update, Delete, Has, Count, GetOrDefault
+- `put_vs_update/` - Understanding the difference between Put and Update
+
+**Key Topics:** Error handling, string vs byte operations, key existence checks
+
+---
+
+### [02-advanced](02-advanced/) - Advanced Features
+Efficient data management with batch operations and maintenance.
+
+**Examples:**
+- `batch_operations/` - PutBatch, GetBatch for multiple keys at once
+- `iteration/` - ForEach to process all key-value pairs
+- `maintenance/` - Verify, Compact, CloseWithCompact
+
+**Key Topics:** Performance optimization, database health, space management
+
+---
+
+### [03-concurrent](03-concurrent/) - Thread-Safe Operations
+Safe concurrent access from multiple goroutines.
+
+**Examples:**
+- `concurrent/` - Concurrent reads, writes, updates, and mixed operations
+
+**Key Topics:** Thread safety, mutex locks, concurrent patterns, race detection
+
+---
+
+### [04-usecases](04-usecases/) - Real-World Applications
+Practical examples showing common use cases.
+
+**Examples:**
+- Session storage
+- Application configuration
+- Simple cache
+- Job queue / task storage
+- Feature flags
+- User preferences
+
+**Key Topics:** Practical patterns, production-ready code, best practices
+
+---
+
+### [05-backup](05-backup/) - Data Protection
+Backup and restore functionality for data safety.
+
+**Examples:**
+- `backup_restore/` - Creating backups, restoring data, optimization
+
+**Key Topics:** JSON backups, disaster recovery, timestamped backups, compaction
+
+---
+
+### [06-fileformat](06-fileformat/) - Binary Format
+Understanding the SKV file format internals.
+
+**Examples:**
+- `demo/` - File format inspection, record structure, type bytes
+
+**Key Topics:** Binary format, header structure, record types, space reuse
+
+---
+
+## 🚀 Quick Start
 
 ```bash
-cd examples/01-basics
+# Clone the repository
+git clone https://github.com/jncss/skv
+cd skv/examples
+
+# Run basic usage example
+cd 01-basics/basic_usage
 go run basic_usage.go
 
-cd ../02-advanced
+# Try other examples
+cd ../../02-advanced/batch_operations
 go run batch_operations.go
-
-# ... etc
 ```
 
-## Examples by Category
+## 📖 Learning Path
 
-### 📚 01-basics/ - Getting Started
+**For beginners:**
+1. **01-basics/basic_usage** - Start here to learn fundamental operations
+2. **01-basics/put_vs_update** - Understand Put vs Update
+3. **04-usecases** - See real-world applications
+4. **02-advanced/batch_operations** - Learn efficient batch operations
 
-#### `basic_usage.go`
-Introduction to basic SKV operations:
-- Opening/closing database
-- Storing and retrieving data
-- Updating values
-- Checking key existence
-- Counting keys
-- Listing all keys
-- Deleting keys
-- Using default values
+**For advanced users:**
+1. **02-advanced/iteration** - Process all data with ForEach
+2. **02-advanced/maintenance** - Keep database optimized
+3. **03-concurrent** - Safe multi-threaded access
+4. **05-backup** - Protect your data
+5. **06-fileformat** - Understand internals
 
-**Perfect for**: First-time users, quick start guide
+## 🎯 Common Patterns
 
-#### `put_vs_update.go`
-Demonstrates the difference between `Put()` and `Update()`:
-- `Put()` creates new keys only
-- `Update()` modifies existing keys only
-- Error handling for duplicate keys
-- Error handling for missing keys
-
-**Perfect for**: Understanding the insert vs update semantics
-
-### 🚀 02-advanced/ - Advanced Features
-
-#### `batch_operations.go`
-Shows how to work with multiple keys efficiently:
-- Batch insert with `PutBatch()`
-- Batch retrieve with `GetBatch()`
-- Atomic behavior (all-or-nothing)
-- Error handling in batch operations
-
-**Perfect for**: Performance optimization, bulk operations
-
-#### `iteration.go`
-Demonstrates iteration over all keys:
-- Using `ForEach()` and `ForEachString()`
-- Processing all key-value pairs
-- Calculating aggregates
-- Filtering data
-- Early termination
-- Working with binary data
-
-**Perfect for**: Data processing, reporting, migrations
-
-#### `maintenance.go`
-Database maintenance and optimization:
-- Checking database statistics with `Verify()`
-- Understanding file growth with updates/deletes
-- Compacting database to reclaim space
-- `CloseWithCompact()` for automatic cleanup
-- Monitoring file size
-
-**Perfect for**: Production deployments, long-running applications
-
-### ⚡ 03-concurrent/ - Concurrency
-
-#### `concurrent.go`
-Thread-safety and concurrent access:
-- Concurrent writes from multiple goroutines
-- Concurrent reads
-- Mixed read/write operations
-- Thread-safe updates
-- Concurrent iteration
-
-**Perfect for**: Multi-threaded applications, web servers
-
-### 💡 04-usecases/ - Real-World Applications
-
-#### `usecases.go`
-Real-world use cases:
-- Configuration storage
-- Session management
-- Structured data (JSON)
-- Cache implementation
-- Feature flags
-- Counters and metrics
-- Namespaced keys
-
-**Perfect for**: Understanding practical applications
-
-### 💾 05-backup/ - Backup and Restore
-
-#### `demo.go`
-Backup and restore operations:
-- Creating JSON backups
-- Smart encoding (text vs base64)
-- Restoring from backup
-- Partial restoration (preserves keys not in backup)
-- Disaster recovery workflows
-- Human-readable backup format
-
-**Perfect for**: Data migration, disaster recovery, database inspection
-
-### 🔧 06-fileformat/ - File Format Details
-
-#### `demo.go`
-File format and header information:
-- SKV file header structure
-- Version information (Major.Minor.Patch)
-- Backward compatibility with old format
-- File size breakdown
-
-**Perfect for**: Understanding the file format internals
-
-## Key Concepts Demonstrated
-
-### Thread Safety
-All examples can be run concurrently without external locking. The library handles synchronization internally.
-
-### Performance
-- O(1) lookups using in-memory cache
-- Batch operations for efficiency
-- Compact operations to optimize storage
-
-### Data Integrity
-- Atomic batch operations
-- File locking prevents corruption
-- Verify operation checks integrity
-
-## Common Patterns
-
-### Configuration Storage
+### Basic CRUD
 ```go
-db.PutString("config.timeout", "30")
-timeout := db.GetOrDefaultString("config.timeout", "10")
+db, _ := skv.Open("mydata")
+defer db.Close()
+
+// Create
+db.PutString("key", "value")
+
+// Read
+value, _ := db.GetString("key")
+
+// Update
+db.UpdateString("key", "new_value")
+
+// Delete
+db.DeleteString("key")
 ```
 
-### Session Management
+### Batch Operations
 ```go
-db.PutString("session:"+sessionID, sessionData)
-if db.HasString("session:"+sessionID) {
-    // Session exists
+// Insert multiple keys at once
+users := map[string]string{
+    "user:1": "Alice",
+    "user:2": "Bob",
+}
+db.PutBatchString(users)
+```
+
+### Iteration
+```go
+// Process all key-value pairs
+db.ForEachString(func(key, value string) error {
+    fmt.Printf("%s: %s\n", key, value)
+    return nil
+})
+```
+
+### Maintenance
+```go
+// Check database health
+stats, _ := db.Verify()
+if stats.WastedSpace > threshold {
+    db.Compact()
 }
 ```
 
-### Caching
+### Backup
 ```go
-if db.Exists(cacheKey) {
-    return db.Get(cacheKey) // Cache hit
-}
-// Cache miss - compute and store
-db.Put(cacheKey, computedValue)
+// Create backup
+db.Backup("backup.json")
+
+// Restore from backup
+db.Restore("backup.json")
 ```
 
-### Feature Flags
-```go
-enabled := db.GetOrDefaultString("feature:new_ui", "false") == "true"
-```
+## 🛠️ Requirements
 
-## Tips
+- **Go**: 1.24.0 or higher
+- **Dependencies**: Only `github.com/jncss/skv` (no external deps)
+- **OS**: Linux, macOS, Windows, BSD
 
-1. **Use string functions** for text data: `PutString()`, `GetString()`, etc.
-2. **Use batch operations** when working with multiple keys
-3. **Compact regularly** if you do many updates/deletes
-4. **Use namespaces** in keys for organization: `user:123`, `config:app`
-5. **Check `Count()`** before iterating if you need to know size first
+## 📝 Running Examples
 
-## Clean Up
-
-Example databases are created in the examples directory. To clean up:
+Each example is self-contained and can be run independently:
 
 ```bash
-rm *.skv
+cd examples/<category>/<example>
+go run *.go
 ```
+
+## 🧪 Testing with Examples
+
+Some examples create data files in a `data/` subdirectory. These are temporary and can be safely deleted.
+
+```bash
+# Clean up all example data
+find examples -type d -name "data" -exec rm -rf {} +
+```
+
+## 💡 Tips
+
+- **Read the README** in each directory for detailed explanations
+- **Run examples in order** to build understanding progressively
+- **Modify and experiment** - all examples are meant to be educational
+- **Check error handling** - examples show proper error patterns
+- **Use race detector** with concurrent examples: `go run -race concurrent.go`
+
+## 🔗 Additional Resources
+
+- **Main README**: [../README.md](../README.md) - Project overview and API reference
+- **Testing Guide**: [../TESTING.md](../TESTING.md) - Comprehensive test suite
+- **GitHub**: [github.com/jncss/skv](https://github.com/jncss/skv)
+
+## 📊 Performance Reference
+
+From project benchmarks:
+- **Writes**: ~750 inserts/sec
+- **Reads**: ~270,000 reads/sec (cached)
+- **Updates**: ~365 updates/sec
+- **Concurrent**: ~1,900 ops/sec (10 goroutines)
+- **Compaction**: ~37% average size reduction
+
+## ❓ Need Help?
+
+1. Check the example code and README in each directory
+2. Read the main project README for API reference
+3. Look at test files (`*_test.go`) for more examples
+4. Open an issue on GitHub for questions or bugs

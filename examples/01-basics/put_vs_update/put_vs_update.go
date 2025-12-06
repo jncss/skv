@@ -1,75 +1,114 @@
-// Example demonstrating Put vs Update behavior
 package main
 
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/jncss/skv"
 )
 
 func main() {
+	// Create data directory if it doesn't exist
+	os.MkdirAll("data", 0755)
+
 	// Open database
-	db, err := skv.Open("example.skv")
+	db, err := skv.Open("data/put_update_demo")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	// Put: Create a new key
-	fmt.Println("Creating new key 'user1'...")
-	if err := db.Put([]byte("user1"), []byte("Alice")); err != nil {
+	fmt.Println("=== Understanding Put vs Update ===\n")
+
+	// --- PUT: Only for NEW keys ---
+	fmt.Println("1. PUT - Creating new keys:")
+	fmt.Println("   Put() only works when the key does NOT exist yet\n")
+
+	err = db.PutString("product", "laptop")
+	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("✓ Key created")
+	fmt.Println("✓ Put('product', 'laptop') - Success!")
 
-	// Try to Put the same key again - will fail
-	fmt.Println("\nTrying to Put 'user1' again...")
-	if err := db.Put([]byte("user1"), []byte("Bob")); err != nil {
-		if err == skv.ErrKeyExists {
-			fmt.Println("✗ Error: Key already exists (as expected)")
-		} else {
-			log.Fatal(err)
-		}
+	// Trying to Put the same key again will fail
+	err = db.PutString("product", "desktop")
+	if err == skv.ErrKeyExists {
+		fmt.Println("✗ Put('product', 'desktop') - Failed: key already exists")
 	}
 
-	// Verify original value is preserved
-	value, _ := db.Get([]byte("user1"))
-	fmt.Printf("Current value: %s\n", value)
+	value, _ := db.GetString("product")
+	fmt.Printf("   Current value: %s (unchanged)\n", value)
 
-	// Update: Modify existing key
-	fmt.Println("\nUpdating 'user1' with Update()...")
-	if err := db.Update([]byte("user1"), []byte("Alice Smith")); err != nil {
+	// --- UPDATE: Only for EXISTING keys ---
+	fmt.Println("\n2. UPDATE - Modifying existing keys:")
+	fmt.Println("   Update() only works when the key EXISTS\n")
+
+	err = db.UpdateString("product", "desktop")
+	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("✓ Key updated")
+	fmt.Println("✓ Update('product', 'desktop') - Success!")
 
-	// Verify new value
-	value, _ = db.Get([]byte("user1"))
-	fmt.Printf("New value: %s\n", value)
+	value, _ = db.GetString("product")
+	fmt.Printf("   Current value: %s (updated)\n", value)
 
-	// Try to Update a non-existent key - will fail
-	fmt.Println("\nTrying to Update non-existent key 'user2'...")
-	if err := db.Update([]byte("user2"), []byte("Charlie")); err != nil {
-		if err == skv.ErrKeyNotFound {
-			fmt.Println("✗ Error: Key not found (as expected)")
-		} else {
-			log.Fatal(err)
-		}
+	// Trying to Update a non-existent key will fail
+	err = db.UpdateString("category", "electronics")
+	if err == skv.ErrKeyNotFound {
+		fmt.Println("\n✗ Update('category', 'electronics') - Failed: key not found")
 	}
 
-	// Delete and re-add
-	fmt.Println("\nDeleting 'user1'...")
-	db.Delete([]byte("user1"))
-	fmt.Println("✓ Key deleted")
+	// --- BEST PRACTICES ---
+	fmt.Println("\n3. BEST PRACTICES:\n")
 
-	// Now Put works again
-	fmt.Println("\nPutting 'user1' again after delete...")
-	if err := db.Put([]byte("user1"), []byte("Bob")); err != nil {
+	// Pattern 1: Check before deciding
+	fmt.Println("Pattern 1 - Check if key exists first:")
+	key := "price"
+	if db.HasString(key) {
+		db.UpdateString(key, "999")
+		fmt.Printf("✓ Updated existing key '%s'\n", key)
+	} else {
+		db.PutString(key, "999")
+		fmt.Printf("✓ Created new key '%s'\n", key)
+	}
+
+	// Pattern 2: Handle errors explicitly
+	fmt.Println("\nPattern 2 - Handle errors explicitly:")
+	err = db.PutString("stock", "50")
+	if err == skv.ErrKeyExists {
+		// Key exists, use Update instead
+		db.UpdateString("stock", "50")
+		fmt.Println("✓ Key existed, used Update instead")
+	} else if err != nil {
+		log.Fatal(err)
+	} else {
+		fmt.Println("✓ New key created with Put")
+	}
+
+	// --- CLEAR and START FRESH ---
+	fmt.Println("\n4. CLEARING database:\n")
+
+	beforeCount := db.Count()
+	fmt.Printf("Keys before Clear: %d\n", beforeCount)
+
+	err = db.Clear()
+	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("✓ Key created")
 
-	value, _ = db.Get([]byte("user1"))
-	fmt.Printf("Final value: %s\n", value)
+	afterCount := db.Count()
+	fmt.Printf("Keys after Clear: %d\n", afterCount)
+
+	// Now we can Put new keys again
+	db.PutString("status", "empty")
+	fmt.Println("✓ Database cleared and new key added")
+
+	fmt.Println("\n=== Summary ===")
+	fmt.Println("• Use Put() to create NEW keys")
+	fmt.Println("• Use Update() to modify EXISTING keys")
+	fmt.Println("• Use Has() to check existence before operations")
+	fmt.Println("• Handle ErrKeyExists and ErrKeyNotFound appropriately")
+
+	fmt.Println("\n✅ Demonstration completed!")
 }

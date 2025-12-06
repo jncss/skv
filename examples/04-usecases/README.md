@@ -1,124 +1,167 @@
-# Real-World Use Cases
+# 04 - Real-World Use Cases
 
 Practical examples showing how to use SKV in real applications.
 
 ## Example
 
-### `usecases.go`
-Complete use case demonstrations:
+### `usecases/`
+Demonstrates six common real-world scenarios:
 
-1. **Configuration Storage**
-   - Application settings
-   - Environment-specific configs
-   - Feature toggles
+1. **User Session Storage**
+   - Create and manage user sessions
+   - Store session data with user info
+   - Update session on activity
+   - Validate sessions
+   - Delete sessions on logout
 
-2. **Session Management**
-   - User session storage
-   - Session expiration tracking
-   - Active session counting
+2. **Application Configuration**
+   - Store app settings and configuration
+   - Batch insert configuration values
+   - Retrieve with defaults
+   - Filter settings by category
+   - Runtime configuration management
 
-3. **Structured Data (JSON)**
-   - Store complex objects
-   - Serialize/deserialize automatically
-   - Type-safe storage
+3. **Simple Cache**
+   - Cache API responses or computed data
+   - Check cache before fetching (cache hit/miss)
+   - Cache invalidation
+   - Fast in-memory lookups
 
-4. **Cache Implementation**
-   - Simple key-value cache
-   - Cache hit/miss detection
-   - Lazy computation
+4. **Job Queue / Task Storage**
+   - Queue jobs for background processing
+   - Store job metadata and status
+   - Process jobs with iteration
+   - Update job status
+   - Track completion
 
 5. **Feature Flags**
    - Enable/disable features dynamically
+   - Check feature status
+   - Toggle features at runtime
+   - List enabled features
    - A/B testing support
-   - Gradual rollouts
 
-6. **Counters and Metrics**
-   - Page view counters
-   - API call tracking
-   - Simple analytics
-
-7. **Namespaced Keys**
-   - Organize data by namespace
-   - User-specific settings
-   - Application-level configs
+6. **User Preferences**
+   - Store per-user settings
+   - Batch insert preferences
+   - Retrieve user-specific settings
+   - Update individual preferences
+   - Namespace by user ID
 
 **Run:**
 ```bash
+cd examples/04-usecases/usecases
 go run usecases.go
 ```
 
-## Common Patterns
+## Use Case Patterns
 
-### Configuration
+### Session Storage
 ```go
-db.PutString("config.timeout", "30")
-timeout := db.GetOrDefaultString("config.timeout", "10")
+// Create session
+sessionID := "sess_abc123"
+sessionData := `{"user_id": "123", "login_time": "..."}`
+db.PutString(sessionID, sessionData)
+
+// Validate session
+if db.HasString(sessionID) {
+    // Session is valid
+}
+
+// Logout
+db.DeleteString(sessionID)
 ```
 
-### Sessions
+### Configuration Management
 ```go
-sessionKey := "session:" + sessionID
-db.PutString(sessionKey, sessionData)
-if db.HasString(sessionKey) {
-    // Session is active
+// Load all config
+config := map[string]string{
+    "app:name":    "MyApp",
+    "db:host":     "localhost",
+    "cache:enabled": "true",
 }
+db.PutBatchString(config)
+
+// Get with fallback
+host := db.GetOrDefaultString("db:host", "localhost")
 ```
 
-### Caching
+### Caching Pattern
 ```go
-if db.Exists(cacheKey) {
-    return db.Get(cacheKey) // Fast cache hit
+// Check cache first
+if !db.HasString(cacheKey) {
+    // Cache miss - fetch data
+    data := fetchFromAPI()
+    db.PutString(cacheKey, data)
+} else {
+    // Cache hit
+    data, _ := db.GetString(cacheKey)
 }
-// Cache miss - compute and store
-result := expensiveComputation()
-db.Put(cacheKey, result)
+
+// Invalidate cache
+db.DeleteString(cacheKey)
 ```
 
 ### Feature Flags
 ```go
-enabled := db.GetOrDefaultString("feature:new_ui", "false") == "true"
-if enabled {
+// Check if feature is enabled
+enabled := db.GetOrDefaultString("feature:new_ui", "false")
+if enabled == "true" {
     // Show new UI
 }
+
+// Toggle feature
+db.UpdateString("feature:new_ui", "true")
 ```
 
-### Namespaces
+### User Preferences
 ```go
-// User settings
-db.PutString("user:123:theme", "dark")
-db.PutString("user:123:lang", "en")
+// Store preferences with user namespace
+userID := "user_123"
+db.PutString(fmt.Sprintf("%s:theme", userID), "dark")
+db.PutString(fmt.Sprintf("%s:language", userID), "en")
 
-// App config
-db.PutString("app:version", "1.0.0")
-db.PutString("app:name", "MyApp")
+// Retrieve preference
+theme := db.GetOrDefaultString(
+    fmt.Sprintf("%s:theme", userID), 
+    "light",
+)
 ```
-
-## Best Practices
-
-1. **Use namespaces** to organize keys: `user:id:property`
-2. **Store JSON** for complex data structures
-3. **Use GetOrDefault** for optional settings
-4. **Compact periodically** if you update configs frequently
-5. **Use batch operations** when initializing multiple settings
 
 ## When to Use SKV
 
-✅ **Good for:**
-- Application configuration
-- Session storage (small to medium scale)
-- Feature flags
-- Simple caching
-- Settings and preferences
-- Counters and simple metrics
+### Good Fits
+- **Session storage** - Fast lookups, temporary data
+- **Configuration** - Application settings, runtime config
+- **Feature flags** - Toggle features without deployment
+- **Simple cache** - Cache computed results or API responses
+- **User preferences** - Per-user settings
+- **Job queues** - Small to medium task storage
+- **Key-value metadata** - Tags, labels, attributes
 
-❌ **Not ideal for:**
-- High-volume transactional workloads
-- Complex queries (no SQL)
-- Relationships between entities
-- Real-time analytics at scale
+### Not Ideal For
+- **Large-scale distributed systems** - Use Redis, etcd, or Consul
+- **Multi-process concurrent access** - No file locking (use client-server DB)
+- **Complex queries** - No SQL/query language (use SQLite or PostgreSQL)
+- **Very large datasets** - Memory cache may be limiting
+- **Transactional requirements** - No ACID transactions
 
-## Related Examples
+## Performance Characteristics
 
-- **01-basics/** - Core operations
-- **02-advanced/** - Batch operations for initializing configs
-- **03-concurrent/** - Thread-safe access for web applications
+Based on the project's benchmarks:
+- **Writes**: ~750 inserts/sec (sequential)
+- **Reads**: ~270,000 reads/sec (cached)
+- **Updates**: ~365 updates/sec
+- **Concurrent**: ~1,900 ops/sec (10 goroutines)
+
+Best for workloads with:
+- Read-heavy patterns (benefits from in-memory cache)
+- Small to medium datasets (< 1 million keys)
+- Single-process applications
+- Local storage requirements
+
+## Next Steps
+
+- **05-backup**: Learn how to backup and restore your data
+- **01-basics**: Review fundamental operations
+- **02-advanced**: Explore batch operations and maintenance

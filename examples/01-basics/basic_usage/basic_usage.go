@@ -1,72 +1,134 @@
-// Basic usage example showing common operations
 package main
 
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/jncss/skv"
 )
 
 func main() {
-	// Open or create database
-	db, err := skv.Open("mydata.skv")
+	// Create data directory if it doesn't exist
+	os.MkdirAll("data", 0755)
+
+	// Open or create a new SKV database
+	// The .skv extension is automatically added if not present
+	db, err := skv.Open("data/mydb")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	fmt.Println("=== Basic SKV Operations ===\n")
+	fmt.Println("=== Basic CRUD Operations ===\n")
 
-	// Store string data
-	fmt.Println("1. Storing data...")
-	db.PutString("username", "alice")
-	db.PutString("email", "alice@example.com")
-	db.PutString("role", "admin")
-	fmt.Println("✓ Data stored")
+	// --- PUT: Add new key-value pairs ---
+	// PutString is convenient for string data
+	err = db.PutString("username", "alice")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("✓ Created key 'username' = 'alice'")
 
-	// Retrieve data
-	fmt.Println("\n2. Retrieving data...")
-	username, _ := db.GetString("username")
-	email, _ := db.GetString("email")
-	fmt.Printf("Username: %s\n", username)
-	fmt.Printf("Email: %s\n", email)
+	err = db.PutString("email", "alice@example.com")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("✓ Created key 'email' = 'alice@example.com'")
 
-	// Update existing key
-	fmt.Println("\n3. Updating data...")
-	db.UpdateString("email", "alice.smith@example.com")
-	email, _ = db.GetString("email")
-	fmt.Printf("New email: %s\n", email)
+	// Put with byte slices for binary data
+	err = db.Put([]byte("age"), []byte{25})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("✓ Created key 'age' = 25")
 
-	// Check if key exists
-	fmt.Println("\n4. Checking existence...")
+	// --- GET: Retrieve values ---
+	fmt.Println("\n=== Reading Values ===\n")
+
+	username, err := db.GetString("username")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("username: %s\n", username)
+
+	email, err := db.GetString("email")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("email: %s\n", email)
+
+	// --- UPDATE: Modify existing values ---
+	fmt.Println("\n=== Updating Values ===\n")
+
+	err = db.UpdateString("username", "alice_smith")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("✓ Updated 'username' to 'alice_smith'")
+
+	updatedUsername, _ := db.GetString("username")
+	fmt.Printf("New username: %s\n", updatedUsername)
+
+	// --- EXISTS: Check if key exists ---
+	fmt.Println("\n=== Checking Key Existence ===\n")
+
 	if db.HasString("username") {
-		fmt.Println("✓ Username exists")
-	}
-	if !db.HasString("phone") {
-		fmt.Println("✓ Phone doesn't exist")
+		fmt.Println("✓ Key 'username' exists")
 	}
 
-	// Count keys
-	fmt.Printf("\n5. Total keys: %d\n", db.Count())
-
-	// List all keys
-	fmt.Println("\n6. All keys:")
-	keys, _ := db.KeysString()
-	for _, key := range keys {
-		value, _ := db.GetString(key)
-		fmt.Printf("  %s: %s\n", key, value)
+	if !db.HasString("nonexistent") {
+		fmt.Println("✗ Key 'nonexistent' does not exist")
 	}
 
-	// Delete a key
-	fmt.Println("\n7. Deleting 'role'...")
-	db.DeleteString("role")
-	fmt.Printf("Keys remaining: %d\n", db.Count())
+	// --- GET WITH DEFAULT: Safe retrieval ---
+	fmt.Println("\n=== Get with Default Value ===\n")
 
-	// Get with default value
-	fmt.Println("\n8. Get with default...")
 	theme := db.GetOrDefaultString("theme", "dark")
-	fmt.Printf("Theme: %s (default)\n", theme)
+	fmt.Printf("Theme (with default): %s\n", theme)
 
-	fmt.Println("\n✓ Example completed successfully!")
+	// --- COUNT: Number of keys ---
+	fmt.Println("\n=== Database Statistics ===\n")
+
+	count := db.Count()
+	fmt.Printf("Total keys in database: %d\n", count)
+
+	// --- DELETE: Remove a key ---
+	fmt.Println("\n=== Deleting Keys ===\n")
+
+	err = db.DeleteString("age")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("✓ Deleted key 'age'")
+
+	// Verify deletion
+	if !db.HasString("age") {
+		fmt.Println("✓ Key 'age' no longer exists")
+	}
+
+	fmt.Printf("\nFinal key count: %d\n", db.Count())
+
+	// --- ERROR HANDLING ---
+	fmt.Println("\n=== Error Handling Examples ===\n")
+
+	// Trying to Put a key that already exists
+	err = db.PutString("username", "bob")
+	if err == skv.ErrKeyExists {
+		fmt.Println("✗ Cannot Put - key 'username' already exists (use Update instead)")
+	}
+
+	// Trying to Update a key that doesn't exist
+	err = db.UpdateString("nonexistent", "value")
+	if err == skv.ErrKeyNotFound {
+		fmt.Println("✗ Cannot Update - key 'nonexistent' not found (use Put instead)")
+	}
+
+	// Trying to Get a key that doesn't exist
+	_, err = db.GetString("missing")
+	if err == skv.ErrKeyNotFound {
+		fmt.Println("✗ Cannot Get - key 'missing' not found")
+	}
+
+	fmt.Println("\n✅ Basic operations completed successfully!")
 }

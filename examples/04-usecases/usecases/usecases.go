@@ -1,175 +1,355 @@
-// Example showing different use cases for SKV
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/jncss/skv"
 )
 
-// User represents a user object
-type User struct {
-	ID        int       `json:"id"`
-	Name      string    `json:"name"`
-	Email     string    `json:"email"`
-	CreatedAt time.Time `json:"created_at"`
-}
+// Example 1: User Session Storage
+func sessionStorageExample() {
+	fmt.Println("=== Use Case 1: User Session Storage ===\n")
 
-func main() {
-	db, err := skv.Open("usecases_example.skv")
+	os.MkdirAll("data", 0755)
+
+	db, err := skv.Open("data/sessions")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
+	// Clear any previous data
 	db.Clear()
 
-	fmt.Println("=== SKV Use Cases ===\n")
+	// Create a session
+	sessionID := "sess_abc123xyz"
+	sessionData := `{"user_id": "user_456", "email": "alice@example.com", "login_time": "2024-12-06T10:30:00Z"}`
 
-	// Use Case 1: Simple configuration storage
-	fmt.Println("1. Configuration storage:")
+	err = db.PutString(sessionID, sessionData)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("✓ Session created: %s\n", sessionID)
+
+	// Retrieve session
+	data, err := db.GetString(sessionID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("✓ Session data: %s\n", data)
+
+	// Update session (e.g., update last activity)
+	updatedData := `{"user_id": "user_456", "email": "alice@example.com", "last_activity": "2024-12-06T11:45:00Z"}`
+	err = db.UpdateString(sessionID, updatedData)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("✓ Session updated\n")
+
+	// Check if session exists (e.g., for authentication)
+	if db.HasString(sessionID) {
+		fmt.Printf("✓ Session is valid\n")
+	}
+
+	// Delete session (logout)
+	err = db.DeleteString(sessionID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("✓ Session deleted (user logged out)\n\n")
+}
+
+// Example 2: Application Configuration
+func configurationExample() {
+	fmt.Println("=== Use Case 2: Application Configuration ===\n")
+
+	db, err := skv.Open("data/config")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Clear any previous data
+	db.Clear()
+
+	// Store configuration settings
 	config := map[string]string{
-		"app.name":      "MyApp",
-		"app.version":   "1.0.0",
-		"server.port":   "8080",
-		"server.host":   "localhost",
-		"db.max_conn":   "100",
-		"cache.enabled": "true",
-		"log.level":     "info",
+		"app:name":          "MyApp",
+		"app:version":       "1.2.0",
+		"db:host":           "localhost",
+		"db:port":           "5432",
+		"cache:enabled":     "true",
+		"cache:ttl":         "3600",
+		"feature:dark_mode": "true",
 	}
 
-	db.PutBatchString(config)
-
-	port := db.GetOrDefaultString("server.port", "3000")
-	logLevel := db.GetOrDefaultString("log.level", "debug")
-	fmt.Printf("  Server: %s:%s\n", db.GetOrDefaultString("server.host", "0.0.0.0"), port)
-	fmt.Printf("  Log level: %s\n", logLevel)
-
-	// Use Case 2: Session storage
-	fmt.Println("\n2. Session storage:")
-	sessions := map[string]string{
-		"session:abc123": `{"user_id":1,"expires":"2024-12-31"}`,
-		"session:def456": `{"user_id":2,"expires":"2024-12-31"}`,
-		"session:ghi789": `{"user_id":3,"expires":"2024-12-31"}`,
+	err = db.PutBatchString(config)
+	if err != nil {
+		log.Fatal(err)
 	}
+	fmt.Printf("✓ Stored %d configuration settings\n", len(config))
 
-	db.PutBatchString(sessions)
+	// Read specific settings
+	appName := db.GetOrDefaultString("app:name", "Unknown App")
+	cacheEnabled := db.GetOrDefaultString("cache:enabled", "false")
 
-	// Retrieve specific session
-	sessionData, _ := db.GetString("session:abc123")
-	fmt.Printf("  Session abc123: %s\n", sessionData)
+	fmt.Printf("✓ App Name: %s\n", appName)
+	fmt.Printf("✓ Cache Enabled: %s\n", cacheEnabled)
 
-	// Clean expired sessions
-	count := 0
+	// List all database-related settings
+	fmt.Println("\nDatabase settings:")
 	db.ForEachString(func(key string, value string) error {
-		if len(key) > 8 && key[:8] == "session:" {
-			count++
-		}
-		return nil
-	})
-	fmt.Printf("  Active sessions: %d\n", count)
-
-	// Use Case 3: Storing structured data (JSON)
-	fmt.Println("\n3. Storing structured data (JSON):")
-
-	user := User{
-		ID:        1,
-		Name:      "Alice",
-		Email:     "alice@example.com",
-		CreatedAt: time.Now(),
-	}
-
-	// Serialize to JSON
-	userData, _ := json.Marshal(user)
-	db.Put([]byte("user:1"), userData)
-
-	// Deserialize from JSON
-	storedData, _ := db.Get([]byte("user:1"))
-	var retrievedUser User
-	json.Unmarshal(storedData, &retrievedUser)
-
-	fmt.Printf("  User: %s (%s)\n", retrievedUser.Name, retrievedUser.Email)
-	fmt.Printf("  Created: %s\n", retrievedUser.CreatedAt.Format("2006-01-02 15:04:05"))
-
-	// Use Case 4: Cache implementation
-	fmt.Println("\n4. Simple cache:")
-
-	// Simulate expensive operation
-	getCachedValue := func(key string) string {
-		if db.HasString(key) {
-			value, _ := db.GetString(key)
-			fmt.Printf("  ✓ Cache hit: %s\n", key)
-			return value
-		}
-
-		fmt.Printf("  ✗ Cache miss: %s (computing...)\n", key)
-		time.Sleep(100 * time.Millisecond) // Simulate expensive operation
-		result := fmt.Sprintf("computed_value_for_%s", key)
-		db.PutString(key, result)
-		return result
-	}
-
-	getCachedValue("expensive:operation:1") // Cache miss
-	getCachedValue("expensive:operation:1") // Cache hit
-	getCachedValue("expensive:operation:2") // Cache miss
-
-	// Use Case 5: Feature flags
-	fmt.Println("\n5. Feature flags:")
-
-	flags := map[string]string{
-		"feature:new_ui":        "true",
-		"feature:dark_mode":     "true",
-		"feature:beta_features": "false",
-		"feature:analytics":     "true",
-	}
-	db.PutBatchString(flags)
-
-	isEnabled := func(feature string) bool {
-		return db.GetOrDefaultString(feature, "false") == "true"
-	}
-
-	fmt.Printf("  New UI enabled: %v\n", isEnabled("feature:new_ui"))
-	fmt.Printf("  Beta features enabled: %v\n", isEnabled("feature:beta_features"))
-	fmt.Printf("  Unknown feature enabled: %v\n", isEnabled("feature:unknown"))
-
-	// Use Case 6: Counters and metrics
-	fmt.Println("\n6. Counters:")
-
-	db.PutString("counter:page_views", "0")
-	db.PutString("counter:api_calls", "0")
-
-	// Increment counters
-	for i := 0; i < 5; i++ {
-		views, _ := db.GetString("counter:page_views")
-		var count int
-		fmt.Sscanf(views, "%d", &count)
-		db.UpdateString("counter:page_views", fmt.Sprintf("%d", count+1))
-	}
-
-	pageViews, _ := db.GetString("counter:page_views")
-	fmt.Printf("  Page views: %s\n", pageViews)
-
-	// Use Case 7: Key-value with namespaces
-	fmt.Println("\n7. Namespaced keys:")
-
-	// Different namespaces
-	db.PutString("user:settings:theme", "dark")
-	db.PutString("user:settings:language", "en")
-	db.PutString("app:config:timeout", "30")
-	db.PutString("app:config:retries", "3")
-
-	// List all user settings
-	fmt.Println("  User settings:")
-	db.ForEachString(func(key string, value string) error {
-		if len(key) > 13 && key[:13] == "user:settings" {
-			fmt.Printf("    %s = %s\n", key[14:], value)
+		if len(key) >= 3 && key[:3] == "db:" {
+			fmt.Printf("  %s = %s\n", key, value)
 		}
 		return nil
 	})
 
-	fmt.Printf("\n✓ Total keys in database: %d\n", db.Count())
-	fmt.Println("✓ Use cases example completed!")
+	fmt.Println()
+}
+
+// Example 3: Simple Cache
+func cacheExample() {
+	fmt.Println("=== Use Case 3: Simple Cache ===\n")
+
+	db, err := skv.Open("data/cache")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Clear any previous data
+	db.Clear()
+
+	// Simulate caching API responses
+	type CacheEntry struct {
+		key   string
+		value string
+	}
+
+	entries := []CacheEntry{
+		{"api:users:123", `{"id": 123, "name": "Alice"}`},
+		{"api:posts:456", `{"id": 456, "title": "Hello World"}`},
+		{"api:comments:789", `{"id": 789, "text": "Great post!"}`},
+	}
+
+	// Cache miss - fetch and store
+	for _, entry := range entries {
+		if !db.HasString(entry.key) {
+			fmt.Printf("Cache MISS: %s\n", entry.key)
+			db.PutString(entry.key, entry.value)
+			fmt.Printf("  ✓ Cached: %s\n", entry.key)
+		}
+	}
+
+	// Cache hit - retrieve from cache
+	fmt.Println("\nRetrieving from cache:")
+	for _, entry := range entries {
+		if db.HasString(entry.key) {
+			data, _ := db.GetString(entry.key)
+			fmt.Printf("Cache HIT: %s -> %s\n", entry.key, data)
+		}
+	}
+
+	// Cache invalidation
+	fmt.Println("\nCache invalidation:")
+	db.DeleteString("api:users:123")
+	fmt.Println("✓ Invalidated cache for api:users:123")
+
+	fmt.Println()
+}
+
+// Example 4: Job Queue / Task Storage
+func jobQueueExample() {
+	fmt.Println("=== Use Case 4: Job Queue / Task Storage ===\n")
+
+	db, err := skv.Open("data/jobs")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Clear any previous data
+	db.Clear()
+
+	// Add jobs to queue
+	jobs := map[string]string{
+		"job:001": `{"type": "email", "to": "user@example.com", "status": "pending"}`,
+		"job:002": `{"type": "report", "format": "pdf", "status": "pending"}`,
+		"job:003": `{"type": "backup", "target": "s3", "status": "pending"}`,
+	}
+
+	err = db.PutBatchString(jobs)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("✓ Queued %d jobs\n", len(jobs))
+
+	// Process jobs
+	fmt.Println("\nProcessing jobs:")
+	processedCount := 0
+
+	// First, collect job keys to process
+	var jobKeys []string
+	db.ForEachString(func(key string, value string) error {
+		if len(key) >= 4 && key[:4] == "job:" {
+			jobKeys = append(jobKeys, key)
+		}
+		return nil
+	})
+
+	// Then process them (outside of ForEach to avoid deadlock)
+	for _, key := range jobKeys {
+		fmt.Printf("  Processing %s...\n", key)
+
+		// Simulate processing
+		time.Sleep(10 * time.Millisecond)
+
+		// Update status
+		updatedValue := `{"status": "completed", "completed_at": "2024-12-06T12:00:00Z"}`
+		db.UpdateString(key, updatedValue)
+
+		processedCount++
+		fmt.Printf("  ✓ Completed %s\n", key)
+	}
+
+	fmt.Printf("\n✓ Processed %d jobs\n", processedCount)
+	fmt.Println()
+}
+
+// Example 5: Feature Flags
+func featureFlagsExample() {
+	fmt.Println("=== Use Case 5: Feature Flags ===\n")
+
+	db, err := skv.Open("data/features")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Clear any previous data
+	db.Clear()
+
+	// Define feature flags
+	features := map[string]string{
+		"feature:new_ui":          "true",
+		"feature:beta_api":        "false",
+		"feature:dark_mode":       "true",
+		"feature:experimental":    "false",
+		"feature:payment_gateway": "true",
+	}
+
+	err = db.PutBatchString(features)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("✓ Initialized %d feature flags\n", len(features))
+
+	// Check feature flags
+	fmt.Println("\nFeature status:")
+
+	checkFeature := func(name string) {
+		enabled := db.GetOrDefaultString(name, "false")
+		status := "❌ Disabled"
+		if enabled == "true" {
+			status = "✅ Enabled"
+		}
+		fmt.Printf("  %s: %s\n", name, status)
+	}
+
+	checkFeature("feature:new_ui")
+	checkFeature("feature:beta_api")
+	checkFeature("feature:dark_mode")
+
+	// Toggle a feature
+	fmt.Println("\nToggling feature:beta_api to enabled...")
+	db.UpdateString("feature:beta_api", "true")
+
+	checkFeature("feature:beta_api")
+
+	// List all enabled features
+	fmt.Println("\nAll enabled features:")
+	db.ForEachString(func(key string, value string) error {
+		if value == "true" {
+			featureName := key
+			if len(key) >= 8 && key[:8] == "feature:" {
+				featureName = key[8:]
+			}
+			fmt.Printf("  ✅ %s\n", featureName)
+		}
+		return nil
+	})
+
+	fmt.Println()
+}
+
+// Example 6: User Preferences
+func userPreferencesExample() {
+	fmt.Println("=== Use Case 6: User Preferences ===\n")
+
+	db, err := skv.Open("data/preferences")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Clear any previous data
+	db.Clear()
+
+	// Store user preferences
+	userID := "user_789"
+
+	prefs := map[string]string{
+		fmt.Sprintf("%s:theme", userID):         "dark",
+		fmt.Sprintf("%s:language", userID):      "en",
+		fmt.Sprintf("%s:timezone", userID):      "UTC",
+		fmt.Sprintf("%s:notifications", userID): "enabled",
+		fmt.Sprintf("%s:email_digest", userID):  "weekly",
+	}
+
+	err = db.PutBatchString(prefs)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("✓ Stored preferences for %s\n", userID)
+
+	// Retrieve user preferences
+	fmt.Println("\nUser preferences:")
+	db.ForEachString(func(key string, value string) error {
+		prefix := userID + ":"
+		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+			setting := key[len(prefix):]
+			fmt.Printf("  %s: %s\n", setting, value)
+		}
+		return nil
+	})
+
+	// Update a preference
+	fmt.Println("\nUpdating theme preference...")
+	themeKey := fmt.Sprintf("%s:theme", userID)
+	db.UpdateString(themeKey, "light")
+
+	newTheme, _ := db.GetString(themeKey)
+	fmt.Printf("✓ Theme updated to: %s\n", newTheme)
+
+	fmt.Println()
+}
+
+func main() {
+	fmt.Println("╔════════════════════════════════════════════╗")
+	fmt.Println("║   SKV - Real-World Use Cases Examples     ║")
+	fmt.Println("╚════════════════════════════════════════════╝")
+	fmt.Println()
+
+	sessionStorageExample()
+	configurationExample()
+	cacheExample()
+	jobQueueExample()
+	featureFlagsExample()
+	userPreferencesExample()
+
+	fmt.Println("✅ All use case examples completed successfully!")
 }
