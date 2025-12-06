@@ -1341,3 +1341,382 @@ func (s *SKV) GetBatchString(keys []string) (map[string]string, error) {
 
 	return result, nil
 }
+
+// PutFile stores a file from disk into the database
+// The file contents are read and stored as the value for the given key
+// Returns error if file cannot be read or if key already exists
+func (s *SKV) PutFile(key string, filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("error reading file %s: %w", filePath, err)
+	}
+	return s.Put([]byte(key), data)
+}
+
+// GetFile retrieves a value from the database and writes it to a file
+// Creates the file if it doesn't exist, overwrites if it does
+// Returns error if key not found or if file cannot be written
+func (s *SKV) GetFile(key string, filePath string) error {
+	data, err := s.Get([]byte(key))
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile(filePath, data, 0644)
+	if err != nil {
+		return fmt.Errorf("error writing file %s: %w", filePath, err)
+	}
+
+	return nil
+}
+
+// UpdateFile updates an existing key with the contents of a file
+// Returns error if file cannot be read or if key doesn't exist
+func (s *SKV) UpdateFile(key string, filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("error reading file %s: %w", filePath, err)
+	}
+	return s.Update([]byte(key), data)
+}
+
+// PutStream stores a new key by reading its value from an io.Reader
+// This is useful for large values that shouldn't be loaded entirely into memory
+// The size parameter must be the exact number of bytes that will be read from the reader
+// Returns ErrKeyExists if the key already exists
+func (s *SKV) PutStream(key []byte, reader io.Reader, size int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(key) == 0 {
+		return fmt.Errorf("key cannot be empty")
+	}
+	if len(key) > 255 {
+		return fmt.Errorf("key too long (max 255 bytes)")
+	}
+	if size < 0 {
+		return fmt.Errorf("size cannot be negative")
+	}
+
+	// Check if the key already exists in cache
+	if _, exists := s.cache[string(key)]; exists {
+		return ErrKeyExists
+	}
+
+	// Write the record using streaming approach
+	recordPos, err := s.writeRecordStream(key, reader, uint64(size))
+	if err != nil {
+		return err
+	}
+
+	// Update cache with record start position
+	s.cache[string(key)] = recordPos
+
+	return nil
+}
+
+// PutStreamString is a convenience wrapper for PutStream using string keys
+func (s *SKV) PutStreamString(key string, reader io.Reader, size int64) error {
+	return s.PutStream([]byte(key), reader, size)
+}
+
+// UpdateStream updates an existing key by reading its new value from an io.Reader
+// This is useful for large values that shouldn't be loaded entirely into memory
+// The size parameter must be the exact number of bytes that will be read from the reader
+// Returns ErrKeyNotFound if the key doesn't exist
+func (s *SKV) UpdateStream(key []byte, reader io.Reader, size int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(key) == 0 {
+		return fmt.Errorf("key cannot be empty")
+	}
+	if size < 0 {
+		return fmt.Errorf("size cannot be negative")
+	}
+
+	// Check if the key exists in cache
+	if _, exists := s.cache[string(key)]; !exists {
+		return ErrKeyNotFound
+	}
+
+	// Key exists, delete it first (internal version without lock)
+	if err := s.deleteInternal(key); err != nil {
+		return err
+	}
+
+	// Write the record using streaming approach
+	recordPos, err := s.writeRecordStream(key, reader, uint64(size))
+	if err != nil {
+		return err
+	}
+
+	// Update cache with record start position
+	s.cache[string(key)] = recordPos
+
+	return nil
+}
+
+// UpdateStreamString is a convenience wrapper for UpdateStream using string keys
+func (s *SKV) UpdateStreamString(key string, reader io.Reader, size int64) error {
+	return s.UpdateStream([]byte(key), reader, size)
+}
+
+// writeRecordStream writes a complete record by reading data from an io.Reader
+// This is used internally by PutStream and UpdateStream
+// Returns the position where the record was written
+func (s *SKV) writeRecordStream(key []byte, reader io.Reader, dataSize uint64) (int64, error) {
+	// Determine the type based on the data size
+	recordType := getRecordType(dataSize)
+	neededSize := calculateRecordSize(byte(len(key)), dataSize, recordType)
+
+	// Try to find suitable free space
+	freeIdx := s.findBestFreeSpace(neededSize)
+
+	var recordPos int64
+	if freeIdx >= 0 {
+		// Reuse free space
+		freeSlot := s.freeSpace[freeIdx]
+		recordPos = freeSlot.position
+
+		// Seek to the free space position
+		if _, err := s.file.Seek(recordPos, io.SeekStart); err != nil {
+			return 0, fmt.Errorf("error seeking to free space: %w", err)
+		}
+
+		// Remove this free space from the list
+		defer func() {
+			s.freeSpace = append(s.freeSpace[:freeIdx], s.freeSpace[freeIdx+1:]...)
+		}()
+
+		// Calculate leftover space for later
+		leftover := freeSlot.size - neededSize
+		defer func() {
+			if leftover > 0 {
+				padding := make([]byte, leftover)
+				for i := range padding {
+					padding[i] = PaddingByte
+				}
+				s.file.Write(padding)
+				s.file.Sync()
+			}
+		}()
+	} else {
+		// No suitable free space, append to end of file
+		if _, err := s.file.Seek(0, io.SeekEnd); err != nil {
+			return 0, fmt.Errorf("error seeking to end of file: %w", err)
+		}
+
+		// Check if we're at the beginning
+		currentPos, err := s.file.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, fmt.Errorf("error getting current position: %w", err)
+		}
+
+		if currentPos == 0 {
+			if err := s.writeHeader(); err != nil {
+				return 0, fmt.Errorf("error writing header: %w", err)
+			}
+		}
+
+		recordPos, err = s.file.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, fmt.Errorf("error getting record position: %w", err)
+		}
+	}
+
+	// Write the type
+	if _, err := s.file.Write([]byte{recordType}); err != nil {
+		return 0, fmt.Errorf("error writing type: %w", err)
+	}
+
+	// Write the key size
+	keySize := byte(len(key))
+	if _, err := s.file.Write([]byte{keySize}); err != nil {
+		return 0, fmt.Errorf("error writing key size: %w", err)
+	}
+
+	// Write the key
+	if _, err := s.file.Write(key); err != nil {
+		return 0, fmt.Errorf("error writing key: %w", err)
+	}
+
+	// Write the data size according to the type
+	switch recordType {
+	case Type1Byte:
+		if _, err := s.file.Write([]byte{byte(dataSize)}); err != nil {
+			return 0, fmt.Errorf("error writing data size: %w", err)
+		}
+	case Type2Bytes:
+		buf := make([]byte, 2)
+		binary.LittleEndian.PutUint16(buf, uint16(dataSize))
+		if _, err := s.file.Write(buf); err != nil {
+			return 0, fmt.Errorf("error writing data size: %w", err)
+		}
+	case Type4Bytes:
+		buf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buf, uint32(dataSize))
+		if _, err := s.file.Write(buf); err != nil {
+			return 0, fmt.Errorf("error writing data size: %w", err)
+		}
+	case Type8Bytes:
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, dataSize)
+		if _, err := s.file.Write(buf); err != nil {
+			return 0, fmt.Errorf("error writing data size: %w", err)
+		}
+	}
+
+	// Stream the data from reader in chunks
+	const bufferSize = 64 * 1024 // 64KB buffer
+	var totalRead int64
+	remaining := dataSize
+
+	for remaining > 0 {
+		chunkSize := bufferSize
+		if remaining < bufferSize {
+			chunkSize = int(remaining)
+		}
+
+		chunk := make([]byte, chunkSize)
+		n, err := io.ReadFull(reader, chunk)
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return 0, fmt.Errorf("reader provided less data than specified size: expected %d, got %d", dataSize, totalRead+int64(n))
+			}
+			return 0, fmt.Errorf("error reading data chunk: %w", err)
+		}
+
+		written, err := s.file.Write(chunk[:n])
+		if err != nil {
+			return 0, fmt.Errorf("error writing data chunk: %w", err)
+		}
+		if written != n {
+			return 0, fmt.Errorf("incomplete write: expected %d, wrote %d", n, written)
+		}
+
+		totalRead += int64(n)
+		remaining -= uint64(n)
+	}
+
+	// Verify no extra data in reader (best effort check)
+	extraCheck := make([]byte, 1)
+	n, err := reader.Read(extraCheck)
+	if err == nil && n > 0 {
+		return 0, fmt.Errorf("reader provided more data than specified size: expected %d bytes", dataSize)
+	}
+
+	// Sync to disk
+	if err := s.file.Sync(); err != nil {
+		return 0, fmt.Errorf("error syncing to disk: %w", err)
+	}
+
+	return recordPos, nil
+}
+
+// GetStream retrieves the value for a key and writes it to an io.Writer
+// This is useful for large values that shouldn't be loaded entirely into memory
+// Returns the number of bytes written and any error encountered
+func (s *SKV) GetStream(key []byte, writer io.Writer) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(key) == 0 {
+		return 0, fmt.Errorf("key cannot be empty")
+	}
+
+	// Check cache for position
+	position, found := s.cache[string(key)]
+	if !found {
+		return 0, ErrKeyNotFound
+	}
+
+	// Seek to the record position
+	if _, err := s.file.Seek(position, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("error seeking to position: %w", err)
+	}
+
+	// Read record type
+	typeBuf := make([]byte, 1)
+	if _, err := io.ReadFull(s.file, typeBuf); err != nil {
+		return 0, fmt.Errorf("error reading type: %w", err)
+	}
+	recordType := typeBuf[0]
+
+	// Read key size
+	keySizeBuf := make([]byte, 1)
+	if _, err := io.ReadFull(s.file, keySizeBuf); err != nil {
+		return 0, fmt.Errorf("error reading key size: %w", err)
+	}
+	keySize := keySizeBuf[0]
+
+	// Skip the key
+	if _, err := s.file.Seek(int64(keySize), io.SeekCurrent); err != nil {
+		return 0, fmt.Errorf("error skipping key: %w", err)
+	}
+
+	// Read data size
+	baseType := getBaseType(recordType)
+	var dataSize uint64
+	switch baseType {
+	case Type1Byte:
+		buf := make([]byte, 1)
+		if _, err := io.ReadFull(s.file, buf); err != nil {
+			return 0, fmt.Errorf("error reading data size: %w", err)
+		}
+		dataSize = uint64(buf[0])
+	case Type2Bytes:
+		buf := make([]byte, 2)
+		if _, err := io.ReadFull(s.file, buf); err != nil {
+			return 0, fmt.Errorf("error reading data size: %w", err)
+		}
+		dataSize = uint64(binary.LittleEndian.Uint16(buf))
+	case Type4Bytes:
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(s.file, buf); err != nil {
+			return 0, fmt.Errorf("error reading data size: %w", err)
+		}
+		dataSize = uint64(binary.LittleEndian.Uint32(buf))
+	case Type8Bytes:
+		buf := make([]byte, 8)
+		if _, err := io.ReadFull(s.file, buf); err != nil {
+			return 0, fmt.Errorf("error reading data size: %w", err)
+		}
+		dataSize = binary.LittleEndian.Uint64(buf)
+	default:
+		return 0, fmt.Errorf("unknown record type: 0x%02X", recordType)
+	}
+
+	// Stream the data in chunks to avoid loading everything into memory
+	const bufferSize = 64 * 1024 // 64KB buffer
+	var totalWritten int64
+	remaining := dataSize
+
+	for remaining > 0 {
+		chunkSize := bufferSize
+		if remaining < bufferSize {
+			chunkSize = int(remaining)
+		}
+
+		chunk := make([]byte, chunkSize)
+		n, err := io.ReadFull(s.file, chunk)
+		if err != nil {
+			return totalWritten, fmt.Errorf("error reading data chunk: %w", err)
+		}
+
+		written, err := writer.Write(chunk[:n])
+		if err != nil {
+			return totalWritten, fmt.Errorf("error writing to stream: %w", err)
+		}
+
+		totalWritten += int64(written)
+		remaining -= uint64(n)
+	}
+
+	return totalWritten, nil
+}
+
+// GetStreamString is a convenience wrapper for GetStream using string keys
+func (s *SKV) GetStreamString(key string, writer io.Writer) (int64, error) {
+	return s.GetStream([]byte(key), writer)
+}
