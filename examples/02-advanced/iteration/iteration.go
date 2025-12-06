@@ -1,106 +1,144 @@
-// Example demonstrating iteration with ForEach
 package main
 
 import (
 	"fmt"
 	"log"
-	"strings"
+	"os"
 
 	"github.com/jncss/skv"
 )
 
 func main() {
-	db, err := skv.Open("iteration_example.skv")
+	os.MkdirAll("data", 0755)
+
+	db, err := skv.Open("data/iteration_demo")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	// Clear any existing data
-	db.Clear()
+	fmt.Println("=== Iteration with ForEach ===\n")
 
-	fmt.Println("=== ForEach Iteration ===\n")
-
-	// Add sample data
-	fmt.Println("1. Adding sample products...")
+	// Setup: Add some sample data
+	fmt.Println("Setting up sample data...")
 	products := map[string]string{
-		"product:laptop":   "899.99",
-		"product:mouse":    "24.99",
-		"product:keyboard": "79.99",
-		"product:monitor":  "299.99",
-		"product:webcam":   "89.99",
+		"product:laptop":     "Dell XPS 13",
+		"product:mouse":      "Logitech MX Master",
+		"product:keyboard":   "Keychron K8",
+		"product:monitor":    "LG UltraWide",
+		"product:headphones": "Sony WH-1000XM4",
 	}
 
 	db.PutBatchString(products)
-	fmt.Printf("✓ Added %d products\n", len(products))
+	fmt.Printf("✓ Added %d products\n\n", len(products))
 
-	// Iterate over all items
-	fmt.Println("\n2. Listing all products:")
+	// --- ForEachString: Iterate over all key-value pairs ---
+	fmt.Println("1. Iterate with ForEachString:")
+
+	count := 0
 	err = db.ForEachString(func(key string, value string) error {
-		// Extract product name from key
-		name := strings.TrimPrefix(key, "product:")
-		fmt.Printf("  %s: $%s\n", name, value)
+		count++
+		fmt.Printf("  [%d] %s: %s\n", count, key, value)
 		return nil
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Calculate total using iteration
-	fmt.Println("\n3. Calculating total inventory value:")
-	var total float64
-	var count int
+	fmt.Printf("\n✓ Iterated over %d items\n", count)
 
-	db.ForEachString(func(key string, value string) error {
-		var price float64
-		fmt.Sscanf(value, "%f", &price)
-		total += price
-		count++
-		return nil
-	})
+	// --- ForEach with filtering ---
+	fmt.Println("\n2. Filtered iteration (keys starting with 'product:'):")
 
-	fmt.Printf("  Total items: %d\n", count)
-	fmt.Printf("  Total value: $%.2f\n", total)
-
-	// Filter items using iteration
-	fmt.Println("\n4. Products under $100:")
-	db.ForEachString(func(key string, value string) error {
-		var price float64
-		fmt.Sscanf(value, "%f", &price)
-
-		if price < 100 {
-			name := strings.TrimPrefix(key, "product:")
-			fmt.Printf("  %s: $%.2f\n", name, price)
+	filtered := 0
+	err = db.ForEachString(func(key string, value string) error {
+		// Filter: only process keys starting with "product:"
+		if len(key) >= 8 && key[:8] == "product:" {
+			filtered++
+			productName := key[8:] // Remove prefix
+			fmt.Printf("  %s: %s\n", productName, value)
 		}
 		return nil
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	// Early termination example
-	fmt.Println("\n5. Finding first product over $200:")
-	db.ForEachString(func(key string, value string) error {
-		var price float64
-		fmt.Sscanf(value, "%f", &price)
+	fmt.Printf("\n✓ Found %d products\n", filtered)
 
-		if price > 200 {
-			name := strings.TrimPrefix(key, "product:")
-			fmt.Printf("  Found: %s at $%.2f\n", name, price)
-			return fmt.Errorf("STOP") // Return error to stop iteration
+	// --- ForEach with early termination ---
+	fmt.Println("\n3. Early termination (stop after 3 items):")
+
+	itemsProcessed := 0
+	maxItems := 3
+
+	err = db.ForEachString(func(key string, value string) error {
+		if itemsProcessed >= maxItems {
+			return fmt.Errorf("reached limit") // Return error to stop iteration
+		}
+		itemsProcessed++
+		fmt.Printf("  [%d] %s: %s\n", itemsProcessed, key, value)
+		return nil
+	})
+
+	// ForEach returns the error that stopped iteration
+	if err != nil {
+		fmt.Printf("\n✓ Stopped early: %v\n", err)
+	}
+
+	// --- ForEach with byte slices ---
+	fmt.Println("\n4. ForEach with byte data:")
+
+	// Add some binary data
+	binaryData := map[string][]byte{
+		"config:version": {1, 0, 0},
+		"config:flags":   {0xFF, 0x00},
+	}
+	db.PutBatch(binaryData)
+
+	err = db.ForEach(func(key []byte, value []byte) error {
+		keyStr := string(key)
+		if len(keyStr) >= 7 && keyStr[:7] == "config:" {
+			fmt.Printf("  %s: %v\n", keyStr, value)
 		}
 		return nil
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	// Using byte version for binary data
-	fmt.Println("\n6. Working with binary data:")
-	db.Clear()
+	// --- Collecting results during iteration ---
+	fmt.Println("\n5. Collecting results (building a list):")
 
-	// Store some binary data
-	db.Put([]byte("config:max_users"), []byte{0, 0, 3, 232}) // 1000 in big-endian
-	db.Put([]byte("config:timeout"), []byte{0, 0, 0, 60})    // 60 seconds
-
-	db.ForEach(func(key []byte, value []byte) error {
-		fmt.Printf("  %s: %v\n", string(key), value)
+	var productNames []string
+	err = db.ForEachString(func(key string, value string) error {
+		if len(key) >= 8 && key[:8] == "product:" {
+			productNames = append(productNames, value)
+		}
 		return nil
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	fmt.Println("\n✓ Example completed!")
+	fmt.Printf("✓ Collected product names: %v\n", productNames)
+
+	// --- Keys() alternative ---
+	fmt.Println("\n6. Alternative: Get all keys first with KeysString():")
+
+	allKeys, err := db.KeysString()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("✓ Total keys: %d\n", len(allKeys))
+	fmt.Printf("  Keys: %v\n", allKeys)
+
+	fmt.Println("\n=== Iteration Summary ===")
+	fmt.Println("• ForEach/ForEachString: Iterate over all key-value pairs")
+	fmt.Println("• Return error to stop iteration early")
+	fmt.Println("• Use filtering logic inside the callback")
+	fmt.Println("• Keys/KeysString: Get all keys as a slice")
+
+	fmt.Println("\n✅ Iteration examples completed!")
 }

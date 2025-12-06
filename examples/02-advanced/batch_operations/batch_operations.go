@@ -1,15 +1,17 @@
-// Example demonstrating batch operations
 package main
 
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/jncss/skv"
 )
 
 func main() {
-	db, err := skv.Open("batch_example.skv")
+	os.MkdirAll("data", 0755)
+
+	db, err := skv.Open("data/batch_demo")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -17,8 +19,9 @@ func main() {
 
 	fmt.Println("=== Batch Operations ===\n")
 
-	// Batch insert - insert multiple keys at once
-	fmt.Println("1. Batch insert users...")
+	// --- PutBatchString: Insert multiple keys at once ---
+	fmt.Println("1. Batch Insert with PutBatchString:")
+
 	users := map[string]string{
 		"user:1": "Alice",
 		"user:2": "Bob",
@@ -27,48 +30,71 @@ func main() {
 		"user:5": "Eve",
 	}
 
-	if err := db.PutBatchString(users); err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("✓ Inserted %d users\n", len(users))
-
-	// Batch get - retrieve multiple keys at once
-	fmt.Println("\n2. Batch get specific users...")
-	keys := []string{"user:1", "user:3", "user:5", "user:99"} // user:99 doesn't exist
-
-	results, err := db.GetBatchString(keys)
+	err = db.PutBatchString(users)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("Retrieved %d out of %d requested keys:\n", len(results), len(keys))
+	fmt.Printf("✓ Inserted %d users in a single batch operation\n", len(users))
+	fmt.Printf("Total keys in database: %d\n", db.Count())
+
+	// --- GetBatchString: Retrieve multiple keys at once ---
+	fmt.Println("\n2. Batch Retrieve with GetBatchString:")
+
+	keysToGet := []string{"user:1", "user:3", "user:5"}
+	results, err := db.GetBatchString(keysToGet)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("✓ Retrieved %d values:\n", len(results))
 	for key, value := range results {
 		fmt.Printf("  %s: %s\n", key, value)
 	}
 
-	// Demonstrate atomic behavior of batch insert
-	fmt.Println("\n3. Attempting batch insert with duplicate...")
-	duplicateUsers := map[string]string{
-		"user:1": "Alice Updated", // This already exists!
-		"user:6": "Frank",
+	// --- PutBatch with byte slices ---
+	fmt.Println("\n3. Batch Insert with byte data (PutBatch):")
+
+	settings := map[string][]byte{
+		"max_users":      []byte{100},
+		"timeout":        []byte{30},
+		"retry_attempts": []byte{3},
 	}
 
-	err = db.PutBatchString(duplicateUsers)
+	err = db.PutBatch(settings)
 	if err != nil {
-		fmt.Printf("✗ Batch insert failed (as expected): %v\n", err)
-		fmt.Println("  None of the keys were inserted (atomic operation)")
+		log.Fatal(err)
 	}
 
-	// Verify user:6 was not inserted
-	if !db.HasString("user:6") {
-		fmt.Println("✓ Confirmed: user:6 was not inserted")
+	fmt.Printf("✓ Inserted %d settings\n", len(settings))
+
+	// --- GetBatch with byte slices ---
+	fmt.Println("\n4. Batch Retrieve with byte data (GetBatch):")
+
+	settingKeys := [][]byte{
+		[]byte("max_users"),
+		[]byte("timeout"),
+		[]byte("retry_attempts"),
 	}
 
-	// Verify user:1 still has original value
-	value, _ := db.GetString("user:1")
-	if value == "Alice" {
-		fmt.Println("✓ Confirmed: user:1 unchanged")
+	settingsData, err := db.GetBatch(settingKeys)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	fmt.Printf("\n✓ Final count: %d users\n", db.Count())
+	fmt.Printf("✓ Retrieved %d settings:\n", len(settingsData))
+	for key, value := range settingsData {
+		fmt.Printf("  %s: %v\n", key, value[0])
+	}
+
+	// --- Performance comparison ---
+	fmt.Println("\n5. Performance Benefits:")
+	fmt.Println("   Batch operations are more efficient because:")
+	fmt.Println("   • Single lock acquisition for multiple operations")
+	fmt.Println("   • Reduced function call overhead")
+	fmt.Println("   • Better cache locality")
+
+	fmt.Printf("\n   Total keys: %d\n", db.Count())
+
+	fmt.Println("\n✅ Batch operations completed!")
 }

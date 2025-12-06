@@ -1,4 +1,3 @@
-// Example showing database maintenance operations
 package main
 
 import (
@@ -9,127 +8,121 @@ import (
 	"github.com/jncss/skv"
 )
 
-func printFileSize(filename string) {
-	info, err := os.Stat(filename)
-	if err != nil {
-		return
-	}
-	fmt.Printf("  File size: %d bytes\n", info.Size())
-}
-
 func main() {
-	dbFile := "maintenance_example.skv"
+	os.MkdirAll("data", 0755)
 
-	db, err := skv.Open(dbFile)
+	db, err := skv.Open("data/maintenance_demo")
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer db.Close()
 
 	fmt.Println("=== Database Maintenance ===\n")
 
-	// Start fresh
-	db.Clear()
+	// Setup: Create, update, and delete some data to generate fragmentation
+	fmt.Println("Setting up test data with fragmentation...")
 
-	// Add initial data
-	fmt.Println("1. Adding 100 records...")
-	for i := 0; i < 100; i++ {
-		key := fmt.Sprintf("key:%03d", i)
-		value := fmt.Sprintf("value_%03d", i)
+	// Insert initial data
+	for i := 1; i <= 20; i++ {
+		key := fmt.Sprintf("item:%d", i)
+		value := fmt.Sprintf("value_%d", i)
 		db.PutString(key, value)
 	}
-	printFileSize(dbFile)
 
-	// Check database stats
-	fmt.Println("\n2. Database statistics:")
-	stats, _ := db.Verify()
-	fmt.Printf("  Total records: %d\n", stats.TotalRecords)
-	fmt.Printf("  Active records: %d\n", stats.ActiveRecords)
-	fmt.Printf("  Deleted records: %d\n", stats.DeletedRecords)
-
-	// Update half of the records
-	fmt.Println("\n3. Updating 50 records...")
-	for i := 0; i < 50; i++ {
-		key := fmt.Sprintf("key:%03d", i)
-		value := fmt.Sprintf("updated_value_%03d", i)
+	// Update some items (creates new versions, old ones marked deleted)
+	for i := 1; i <= 10; i++ {
+		key := fmt.Sprintf("item:%d", i)
+		value := fmt.Sprintf("updated_value_%d", i)
 		db.UpdateString(key, value)
 	}
-	printFileSize(dbFile)
 
-	// Check stats after updates
-	fmt.Println("\n4. After updates:")
-	stats, _ = db.Verify()
-	fmt.Printf("  Total records: %d (old + new versions)\n", stats.TotalRecords)
-	fmt.Printf("  Active records: %d\n", stats.ActiveRecords)
-	fmt.Printf("  Deleted records: %d (old versions marked deleted)\n", stats.DeletedRecords)
-
-	// Delete some records
-	fmt.Println("\n5. Deleting 25 records...")
-	for i := 50; i < 75; i++ {
-		key := fmt.Sprintf("key:%03d", i)
+	// Delete some items
+	for i := 11; i <= 15; i++ {
+		key := fmt.Sprintf("item:%d", i)
 		db.DeleteString(key)
 	}
 
-	fmt.Println("\n6. After deletions:")
-	stats, _ = db.Verify()
-	fmt.Printf("  Total records: %d\n", stats.TotalRecords)
-	fmt.Printf("  Active records: %d\n", stats.ActiveRecords)
-	fmt.Printf("  Deleted records: %d\n", stats.DeletedRecords)
-	printFileSize(dbFile)
+	fmt.Printf("✓ Data setup complete\n")
+	fmt.Printf("  Active keys: %d\n", db.Count())
 
-	// Compact to reclaim space
-	fmt.Println("\n7. Compacting database...")
-	if err := db.Compact(); err != nil {
+	// --- Verify: Check database statistics ---
+	fmt.Println("\n1. Verify - Database Statistics:")
+
+	stats, err := db.Verify()
+	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Println("\n8. After compaction:")
-	stats, _ = db.Verify()
-	fmt.Printf("  Total records: %d (only active records)\n", stats.TotalRecords)
-	fmt.Printf("  Active records: %d\n", stats.ActiveRecords)
-	fmt.Printf("  Deleted records: %d\n", stats.DeletedRecords)
-	printFileSize(dbFile)
+	fmt.Printf("\n  Total Records:    %d\n", stats.TotalRecords)
+	fmt.Printf("  Active Records:   %d\n", stats.ActiveRecords)
+	fmt.Printf("  Deleted Records:  %d\n", stats.DeletedRecords)
+	fmt.Printf("  File Size:        %d bytes\n", stats.FileSize)
+	fmt.Printf("  Data Size:        %d bytes\n", stats.DataSize)
+	fmt.Printf("  Wasted Space:     %d bytes\n", stats.WastedSpace)
+	fmt.Printf("  Wasted %%:         %.2f%%\n", stats.WastedPercent)
 
-	// Verify data integrity
-	fmt.Println("\n9. Verifying updated values are preserved...")
-	value, _ := db.GetString("key:000")
-	if value == "updated_value_000" {
-		fmt.Println("✓ Updated values preserved")
-	}
+	// --- Compact: Remove deleted records and duplicates ---
+	fmt.Println("\n2. Compact - Optimize database:")
 
-	value, _ = db.GetString("key:075")
-	if value == "value_075" {
-		fmt.Println("✓ Non-updated values preserved")
-	}
+	fmt.Println("\n  Before compaction:")
+	fmt.Printf("    File size: %d bytes\n", stats.FileSize)
+	fmt.Printf("    Wasted space: %d bytes (%.2f%%)\n", stats.WastedSpace, stats.WastedPercent)
 
-	if !db.HasString("key:050") {
-		fmt.Println("✓ Deleted keys removed")
-	}
-
-	fmt.Printf("\n✓ Final count: %d active keys\n", db.Count())
-
-	// Close with compact option
-	fmt.Println("\n10. Demonstrating CloseWithCompact...")
-	fmt.Println("  (This compacts automatically on close)")
-
-	// Add and delete some more to create garbage
-	for i := 0; i < 10; i++ {
-		db.PutString(fmt.Sprintf("temp:%d", i), "temporary")
-		db.DeleteString(fmt.Sprintf("temp:%d", i))
-	}
-
-	stats, _ = db.Verify()
-	fmt.Printf("  Before close: %d total, %d deleted\n", stats.TotalRecords, stats.DeletedRecords)
-
-	if err := db.CloseWithCompact(); err != nil {
+	err = db.Compact()
+	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Reopen to verify
-	db, _ = skv.Open(dbFile)
-	defer db.Close()
+	fmt.Println("\n  ✓ Compaction completed")
 
-	stats, _ = db.Verify()
-	fmt.Printf("  After CloseWithCompact: %d total, %d deleted\n", stats.TotalRecords, stats.DeletedRecords)
+	// Verify again after compaction
+	statsAfter, err := db.Verify()
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	fmt.Println("\n✓ Maintenance example completed!")
+	fmt.Println("\n  After compaction:")
+	fmt.Printf("    File size: %d bytes\n", statsAfter.FileSize)
+	fmt.Printf("    Space saved: %d bytes\n", stats.FileSize-statsAfter.FileSize)
+	fmt.Printf("    Wasted space: %d bytes (%.2f%%)\n", statsAfter.WastedSpace, statsAfter.WastedPercent)
+
+	if stats.FileSize > 0 {
+		savingsPercent := float64(stats.FileSize-statsAfter.FileSize) / float64(stats.FileSize) * 100
+		fmt.Printf("    Reduction: %.2f%%\n", savingsPercent)
+	}
+
+	// --- When to compact ---
+	fmt.Println("\n3. When to Compact:")
+	fmt.Println("   • After many updates or deletes")
+	fmt.Println("   • When wasted space exceeds a threshold (e.g., 30%)")
+	fmt.Println("   • During scheduled maintenance windows")
+	fmt.Println("   • Before backups to reduce file size")
+
+	// --- Example: Conditional compaction ---
+	fmt.Println("\n4. Conditional Compaction Pattern:")
+
+	currentStats, _ := db.Verify()
+	threshold := 0.30 // 30% wasted space
+
+	fmt.Printf("\n   Current wasted space: %.2f%%\n", currentStats.WastedPercent)
+	fmt.Printf("   Threshold: %.2f%%\n", threshold*100)
+
+	if currentStats.WastedPercent > threshold*100 {
+		fmt.Println("   ➜ Triggering compaction (threshold exceeded)")
+		db.Compact()
+	} else {
+		fmt.Println("   ➜ No compaction needed (below threshold)")
+	}
+
+	// --- CloseWithCompact ---
+	fmt.Println("\n5. Close with Compact:")
+	fmt.Println("   Use CloseWithCompact() instead of Close() to:")
+	fmt.Println("   • Automatically compact before closing")
+	fmt.Println("   • Ensure optimal file size on disk")
+	fmt.Println("   • Useful for long-running applications")
+
+	fmt.Println("\n   Example:")
+	fmt.Println("   defer db.CloseWithCompact() // Instead of db.Close()")
+
+	fmt.Println("\n✅ Maintenance operations completed!")
 }

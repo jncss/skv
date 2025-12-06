@@ -1,62 +1,126 @@
-# Advanced Examples
+# 02 - Advanced Operations
 
-Master advanced features for optimized and efficient database operations.
+Advanced features for efficient data management.
 
 ## Examples
 
-### `batch_operations.go`
-Efficient multi-key operations:
-- `PutBatch()` - Insert multiple keys atomically
-- `GetBatch()` - Retrieve multiple keys at once
-- Atomic all-or-nothing behavior
-- Performance benefits over individual operations
-
-**Use when:** Inserting or retrieving many keys at once
+### `batch_operations/`
+Efficiently handle multiple keys at once:
+- **PutBatchString**: Insert multiple key-value pairs in a single operation
+- **PutBatch**: Batch insert with byte data
+- **GetBatchString**: Retrieve multiple values at once
+- **GetBatch**: Batch retrieval with byte data
+- **Performance Benefits**: Reduced overhead and better efficiency
 
 **Run:**
 ```bash
+cd examples/02-advanced/batch_operations
 go run batch_operations.go
 ```
 
-### `iteration.go`
-Process all key-value pairs:
-- `ForEach()` / `ForEachString()` - Iterate over all data
-- Calculate aggregates (sum, count, average)
-- Filter and search data
-- Early termination on specific conditions
-- Handle binary data
-
-**Use when:** Need to process all records, generate reports, or migrate data
+### `iteration/`
+Process all key-value pairs in the database:
+- **ForEachString**: Iterate over all entries with string callback
+- **ForEach**: Iterate with byte data
+- **Filtering**: Process only matching keys during iteration
+- **Early Termination**: Stop iteration by returning an error
+- **Collecting Results**: Build lists or maps during iteration
+- **KeysString/Keys**: Get all keys as a slice
 
 **Run:**
 ```bash
+cd examples/02-advanced/iteration
 go run iteration.go
 ```
 
-### `maintenance.go`
-Database optimization and monitoring:
-- `Verify()` - Get database statistics
-- `Compact()` - Reclaim space from deleted/updated records
-- `CloseWithCompact()` - Compact on shutdown
-- File size monitoring
-- Understanding storage growth
-
-**Use when:** Running production databases that accumulate updates/deletes
+### `maintenance/`
+Keep your database optimized:
+- **Verify**: Get detailed statistics about database health
+- **Stats**: Total/active/deleted records, duplicate keys, wasted space
+- **Compact**: Remove deleted records and old versions to reduce file size
+- **Conditional Compaction**: Compact only when wasted space exceeds a threshold
+- **CloseWithCompact**: Automatically compact before closing
 
 **Run:**
 ```bash
+cd examples/02-advanced/maintenance
 go run maintenance.go
+```
+
+## Key Concepts
+
+### Batch Operations
+```go
+// Insert multiple at once (more efficient)
+users := map[string]string{
+    "user:1": "Alice",
+    "user:2": "Bob",
+    "user:3": "Charlie",
+}
+db.PutBatchString(users)
+
+// Retrieve multiple at once
+keys := []string{"user:1", "user:2"}
+results, _ := db.GetBatchString(keys)
+```
+
+### Iteration
+```go
+// Process all key-value pairs
+db.ForEachString(func(key string, value string) error {
+    fmt.Printf("%s: %s\n", key, value)
+    return nil
+})
+
+// Early termination
+db.ForEachString(func(key string, value string) error {
+    if someCondition {
+        return fmt.Errorf("stop") // Stops iteration
+    }
+    return nil
+})
+```
+
+### Maintenance
+```go
+// Check database health
+stats, _ := db.Verify()
+fmt.Printf("Wasted space: %d bytes (%.2f%%)\n", 
+    stats.WastedSpace,
+    float64(stats.WastedSpace)/float64(stats.TotalSize)*100)
+
+// Compact if needed
+if stats.DeletedRecords > 100 {
+    db.Compact()
+}
+
+// Or compact on close
+defer db.CloseWithCompact()
+```
+
+### Statistics Structure
+```go
+type Stats struct {
+    TotalRecords    int    // All records (active + deleted)
+    ActiveRecords   int    // Currently active records
+    DeletedRecords  int    // Marked as deleted
+    DuplicateKeys   int    // Old versions of updated keys
+    TotalSize       int64  // Total file size
+    ActiveDataSize  int64  // Size of active data only
+    WastedSpace     int64  // Space from deleted/duplicate records
+}
 ```
 
 ## Performance Tips
 
-1. **Batch operations** are faster than individual operations for multiple keys
-2. **Compact regularly** if you have many updates/deletes (e.g., >30% deleted)
-3. **Use ForEach** instead of Keys() + Get() for processing all data
-4. **Monitor with Verify()** to understand database health
+1. **Use batch operations** when inserting/retrieving multiple keys
+2. **Compact periodically** to maintain optimal file size (e.g., 30% wasted space threshold)
+3. **Use ForEach** instead of Keys + Get loop for better performance
+4. **Monitor statistics** with Verify to understand database health
+5. **CloseWithCompact** for long-running applications that accumulate many updates
 
-## Related Examples
+## Next Steps
 
-- **01-basics/** - Foundation concepts
-- **03-concurrent/** - Thread-safe operations
-- **04-usecases/** - Real-world patterns
+- **03-concurrent**: Thread-safe concurrent operations
+- **04-usecases**: Real-world application examples
+- **05-backup**: Backup and restore functionality
