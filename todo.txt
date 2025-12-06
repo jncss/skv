@@ -1,5 +1,3 @@
-En l'eina 'cli' skv, una opció que faci que les claus o els valors es mostrin en un dump hexa.
 Eina de 'cli' recuperació, cal afegir algun byte de marca de registre per facilitar un 'recover'?
-Multiples claus.
-Dades xifrades.
+Multiples claus?
 Demanar opinió del projecte a altres IA's.
