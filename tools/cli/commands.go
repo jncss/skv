@@ -1,11 +1,86 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jncss/skv"
 )
+
+// Global flags
+var hexDump bool
+
+// parseFlags parses global flags from args
+func parseFlags() []string {
+	remaining := []string{}
+	for i, arg := range os.Args {
+		if i == 0 {
+			remaining = append(remaining, arg)
+			continue
+		}
+		if arg == "--hex" || arg == "-x" {
+			hexDump = true
+		} else {
+			remaining = append(remaining, arg)
+		}
+	}
+	return remaining
+}
+
+// formatHex formats a string as hexdump
+func formatHex(s string) string {
+	data := []byte(s)
+	if len(data) == 0 {
+		return "(empty)"
+	}
+
+	var builder strings.Builder
+	for i := 0; i < len(data); i += 16 {
+		// Offset
+		builder.WriteString(fmt.Sprintf("%08x  ", i))
+
+		// Hex bytes
+		end := i + 16
+		if end > len(data) {
+			end = len(data)
+		}
+
+		for j := i; j < i+16; j++ {
+			if j < end {
+				builder.WriteString(fmt.Sprintf("%02x ", data[j]))
+			} else {
+				builder.WriteString("   ")
+			}
+			if j == i+7 {
+				builder.WriteString(" ")
+			}
+		}
+
+		// ASCII representation
+		builder.WriteString(" |")
+		for j := i; j < end; j++ {
+			if data[j] >= 32 && data[j] <= 126 {
+				builder.WriteByte(data[j])
+			} else {
+				builder.WriteByte('.')
+			}
+		}
+		builder.WriteString("|")
+
+		if i+16 < len(data) {
+			builder.WriteString("\n")
+		}
+	}
+
+	return builder.String()
+}
+
+// formatHexCompact formats a string as compact hex (like "48656c6c6f")
+func formatHexCompact(s string) string {
+	return hex.EncodeToString([]byte(s))
+}
 
 // handlePut stores a new key-value pair
 func handlePut() {
@@ -65,7 +140,11 @@ func handleGet() {
 		os.Exit(1)
 	}
 
-	fmt.Print(value)
+	if hexDump {
+		fmt.Println(formatHex(value))
+	} else {
+		fmt.Print(value)
+	}
 }
 
 // handleUpdate updates an existing key
@@ -193,7 +272,11 @@ func handleKeys() {
 	}
 
 	for _, key := range keys {
-		fmt.Println(key)
+		if hexDump {
+			fmt.Println(formatHex(key))
+		} else {
+			fmt.Println(key)
+		}
 	}
 }
 
@@ -239,7 +322,15 @@ func handleForEach() {
 	defer db.Close()
 
 	err = db.ForEachString(func(key string, value string) error {
-		fmt.Printf("%s=%s\n", key, value)
+		if hexDump {
+			fmt.Println("Key:")
+			fmt.Println(formatHex(key))
+			fmt.Println("Value:")
+			fmt.Println(formatHex(value))
+			fmt.Println()
+		} else {
+			fmt.Printf("%s=%s\n", key, value)
+		}
 		return nil
 	})
 
@@ -532,7 +623,15 @@ func handleGetBatch() {
 	}
 
 	for key, value := range result {
-		fmt.Printf("%s=%s\n", key, value)
+		if hexDump {
+			fmt.Println("Key:")
+			fmt.Println(formatHex(key))
+			fmt.Println("Value:")
+			fmt.Println(formatHex(value))
+			fmt.Println()
+		} else {
+			fmt.Printf("%s=%s\n", key, value)
+		}
 	}
 }
 

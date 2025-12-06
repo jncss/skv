@@ -214,6 +214,36 @@ skv verify archive.skv
 skv compact archive.skv
 ```
 
+## Working with Binary Data and Hexdump
+
+```bash
+# Store binary file
+skv putfile mydb.skv logo logo.png
+
+# View binary data as hexdump
+skv --hex get mydb.skv logo | head -3
+# Output:
+# 00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52  |.PNG........IHDR|
+# 00000010  00 00 01 90 00 00 00 c8  08 06 00 00 00 7b 9b 89  |.............{..|
+# 00000020  14 00 00 00 09 70 48 59  73 00 00 0b 13 00 00 0b  |.....pHYs.......|
+
+# Check encoding of special characters
+skv put mydb.skv greeting "Hello Wörld! ñáéíóú €"
+skv -x get mydb.skv greeting
+# Shows UTF-8 encoding:
+# 00000000  48 65 6c 6c 6f 20 57 c3  b6 72 6c 64 21 20 c3 b1  |Hello W..rld! ..|
+# ...
+
+# View all keys as hex (useful for debugging key names)
+skv -x keys mydb.skv
+
+# Inspect all data in hex format
+skv --hex foreach mydb.skv
+
+# Check specific values from batch
+skv --hex getbatch mydb.skv greeting logo
+```
+
 ## Tips
 
 1. **Use streaming for large files (> 1MB)**: `putstream`/`getstream` instead of `putfile`/`getfile`
@@ -221,6 +251,7 @@ skv compact archive.skv
 3. **Monitor wasted space**: Run `verify` periodically, compact when > 30%
 4. **Backup important data**: Use `backup` before major operations
 5. **Key naming conventions**: Use prefixes for organization (e.g., `user:`, `sess:`, `cache:`)
+6. **Debug with hexdump**: Use `--hex` or `-x` to inspect binary data or encoding issues
 
 ## Getting Help
 

@@ -103,6 +103,10 @@ skv get mydb.skv username
 skv update mydb.skv username "bob"
 skv delete mydb.skv username
 
+# Hexdump mode for binary data inspection
+skv --hex get mydb.skv username     # View as hexdump
+skv -x keys mydb.skv                # List keys in hex format
+
 # File operations
 skv putfile mydb.skv config config.ini
 skv getfile mydb.skv config retrieved.ini

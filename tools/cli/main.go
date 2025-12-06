@@ -6,12 +6,18 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
+	// Parse global flags and get filtered args
+	args := parseFlags()
+
+	// Replace os.Args with filtered args for command handlers
+	os.Args = args
+
+	if len(args) < 2 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	command := os.Args[1]
+	command := args[1]
 
 	switch command {
 	case "put":
@@ -68,7 +74,10 @@ func main() {
 func printUsage() {
 	fmt.Println("SKV - Simple Key-Value Database CLI")
 	fmt.Println()
-	fmt.Println("Usage: skv <command> [arguments]")
+	fmt.Println("Usage: skv [options] <command> [arguments]")
+	fmt.Println()
+	fmt.Println("Global Options:")
+	fmt.Println("  --hex, -x                        Show keys/values as hexdump")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  Basic Operations:")
@@ -108,6 +117,8 @@ func printUsage() {
 	fmt.Println("Examples:")
 	fmt.Println("  skv put mydb.skv name 'John Doe'")
 	fmt.Println("  skv get mydb.skv name")
+	fmt.Println("  skv --hex get mydb.skv name          # Show value as hexdump")
+	fmt.Println("  skv -x keys mydb.skv                 # Show all keys as hexdump")
 	fmt.Println("  skv putfile mydb.skv config config.ini")
 	fmt.Println("  skv backup mydb.skv backup.json")
 	fmt.Println()
@@ -117,13 +128,21 @@ func printHelp() {
 	printUsage()
 	fmt.Println("Detailed Command Information:")
 	fmt.Println()
+	fmt.Println("GLOBAL OPTIONS")
+	fmt.Println("  --hex, -x")
+	fmt.Println("    Display keys and values as hexadecimal dump")
+	fmt.Println("    Format: offset + hex bytes + ASCII representation")
+	fmt.Println("    Works with: get, keys, foreach, getbatch")
+	fmt.Println("    Example: skv --hex get mydb.skv mykey")
+	fmt.Println()
 	fmt.Println("PUT - Store a new key-value pair")
 	fmt.Println("  Usage: skv put <database> <key> <value>")
 	fmt.Println("  Note: Returns error if key already exists. Use 'update' to modify.")
 	fmt.Println()
 	fmt.Println("GET - Retrieve a value")
 	fmt.Println("  Usage: skv get <database> <key>")
-	fmt.Println("  Output: Prints the value to stdout")
+	fmt.Println("  Usage: skv --hex get <database> <key>")
+	fmt.Println("  Output: Prints the value to stdout (or hexdump if --hex)")
 	fmt.Println()
 	fmt.Println("UPDATE - Update an existing key")
 	fmt.Println("  Usage: skv update <database> <key> <value>")
@@ -142,7 +161,8 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("KEYS - List all keys")
 	fmt.Println("  Usage: skv keys <database>")
-	fmt.Println("  Output: One key per line")
+	fmt.Println("  Usage: skv --hex keys <database>")
+	fmt.Println("  Output: One key per line (or hexdump if --hex)")
 	fmt.Println()
 	fmt.Println("CLEAR - Remove all keys")
 	fmt.Println("  Usage: skv clear <database>")
@@ -150,7 +170,8 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("FOREACH - Iterate over all key-value pairs")
 	fmt.Println("  Usage: skv foreach <database>")
-	fmt.Println("  Output: key=value (one per line)")
+	fmt.Println("  Usage: skv --hex foreach <database>")
+	fmt.Println("  Output: key=value (one per line, or hexdump if --hex)")
 	fmt.Println()
 	fmt.Println("PUTFILE - Store file contents as a value")
 	fmt.Println("  Usage: skv putfile <database> <key> <filepath>")
@@ -180,7 +201,8 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("GETBATCH - Retrieve multiple keys")
 	fmt.Println("  Usage: skv getbatch <database> <key1> <key2> <key3> ...")
-	fmt.Println("  Output: key=value (one per line)")
+	fmt.Println("  Usage: skv --hex getbatch <database> <key1> <key2> ...")
+	fmt.Println("  Output: key=value (one per line, or hexdump if --hex)")
 	fmt.Println()
 	fmt.Println("BACKUP - Create JSON backup")
 	fmt.Println("  Usage: skv backup <database> <json-file>")

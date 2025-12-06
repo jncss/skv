@@ -29,8 +29,15 @@ This will install the `skv` binary to your `$GOPATH/bin` directory.
 ## Usage
 
 ```
-skv <command> [arguments]
+skv [options] <command> [arguments]
 ```
+
+### Global Options
+
+- `--hex` or `-x`: Display keys and values as hexadecimal dump
+  - Format: `offset + hex bytes + ASCII representation`
+  - Useful for binary data or debugging encoding issues
+  - Works with: `get`, `keys`, `foreach`, `getbatch`
 
 ## Commands
 
@@ -46,6 +53,11 @@ skv put mydb.skv email "john@example.com"
 ```bash
 skv get mydb.skv username
 # Output: john_doe
+
+# View as hexdump
+skv --hex get mydb.skv username
+# Output:
+# 00000000  6a 6f 68 6e 5f 64 6f 65                           |john_doe|
 ```
 
 #### update - Update an existing key
@@ -77,6 +89,13 @@ skv keys mydb.skv
 # username
 # email
 # config
+
+# View as hexdump
+skv --hex keys mydb.skv
+# Output:
+# 00000000  75 73 65 72 6e 61 6d 65                           |username|
+# 00000000  65 6d 61 69 6c                                    |email|
+# 00000000  63 6f 6e 66 69 67                                 |config|
 ```
 
 #### clear - Remove all keys
@@ -92,6 +111,19 @@ skv foreach mydb.skv
 # Output (key=value):
 # username=john_doe
 # email=john@example.com
+
+# View as hexdump
+skv -x foreach mydb.skv
+# Output:
+# Key:
+# 00000000  75 73 65 72 6e 61 6d 65                           |username|
+# Value:
+# 00000000  6a 6f 68 6e 5f 64 6f 65                           |john_doe|
+#
+# Key:
+# 00000000  65 6d 61 69 6c                                    |email|
+# Value:
+# 00000000  6a 6f 68 6e 40 65 78 61  6d 70 6c 65 2e 63 6f 6d  |john@example.com|
 ```
 
 ### File Operations
@@ -151,6 +183,19 @@ skv getbatch mydb.skv username email role
 # username=john
 # email=john@example.com
 # role=admin
+
+# View as hexdump
+skv --hex getbatch mydb.skv username email
+# Output:
+# Key:
+# 00000000  75 73 65 72 6e 61 6d 65                           |username|
+# Value:
+# 00000000  6a 6f 68 6e                                       |john|
+#
+# Key:
+# 00000000  65 6d 61 69 6c                                    |email|
+# Value:
+# 00000000  6a 6f 68 6e 40 65 78 61  6d 70 6c 65 2e 63 6f 6d  |john@example.com|
 ```
 
 ### Backup & Maintenance
@@ -336,6 +381,81 @@ Store CSS, JS, images for web applications.
 3. **Monitor wasted space**: Run `verify` periodically
 4. **Compact regularly**: When wasted space > 30%
 5. **Backup important data**: Use `backup` before major operations
+
+## Hexdump Mode
+
+The `--hex` (or `-x`) flag enables hexadecimal dump mode for viewing keys and values as raw bytes. This is particularly useful for:
+
+### Use Cases
+
+1. **Binary data inspection**: View non-text data stored in the database
+2. **Encoding verification**: Check UTF-8 or other encodings
+3. **Debugging**: Identify hidden characters, null bytes, or control characters
+4. **Data validation**: Verify exact byte sequences
+
+### Format
+
+Hexdump output uses the classic `hexdump -C` format:
+
+```
+00000000  48 65 6c 6c 6f 20 57 6f  72 6c 64 21 20 54 68 69  |Hello World! Thi|
+00000010  73 20 69 73 20 61 20 74  65 73 74 20 76 61 6c 75  |s is a test valu|
+00000020  65 20 77 69 74 68 20 73  70 65 63 69 61 6c 20 63  |e with special c|
+00000030  68 61 72 73 3a 20 c3 b1  c3 a1 c3 a9 c3 ad c3 b3  |hars: ..........|
+00000040  c3 ba                                             |..|
+```
+
+**Format components:**
+- **Offset** (left): Byte position in hexadecimal (8 digits)
+- **Hex bytes** (middle): Raw bytes in hexadecimal (16 bytes per line, grouped by 8)
+- **ASCII** (right): Printable ASCII characters (`.` for non-printable)
+
+### Examples
+
+#### Inspect binary data
+```bash
+# Store binary data
+skv putfile mydb.skv image logo.png
+
+# View first bytes in hex
+skv --hex get mydb.skv image | head -5
+# Output:
+# 00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52  |.PNG........IHDR|
+# ...
+```
+
+#### Check encoding issues
+```bash
+# Store text with special characters
+skv put mydb.skv text "Héllo Wörld €"
+
+# View encoding
+skv -x get mydb.skv text
+# Output shows UTF-8 encoding:
+# 00000000  48 c3 a9 6c 6c 6f 20 57  c3 b6 72 6c 64 20 e2 82  |H..llo W..rld ..|
+# 00000010  ac                                                |.|
+```
+
+#### Debug hidden characters
+```bash
+# Check for null bytes, newlines, etc.
+skv --hex get mydb.skv suspect_data
+```
+
+#### Compare keys
+```bash
+# List all keys in hex to spot differences
+skv -x keys mydb.skv
+```
+
+### Supported Commands
+
+The `--hex` flag works with these commands:
+
+- `get` - View single value as hexdump
+- `keys` - View all keys as hexdump
+- `foreach` - View all key-value pairs as hexdump
+- `getbatch` - View multiple values as hexdump
 
 ## Exit Codes
 
