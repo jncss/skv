@@ -17,7 +17,8 @@ func main() {
 	}
 	defer db.Close()
 
-	fmt.Println("=== Database Maintenance ===\n")
+	fmt.Println("=== Database Maintenance ===")
+	fmt.Println()
 
 	// Setup: Create, update, and delete some data to generate fragmentation
 	fmt.Println("Setting up test data with fragmentation...")

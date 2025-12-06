@@ -3,8 +3,8 @@
 A Go library for storing key/value data in a sequential binary file format.
 
 [![Production Ready](https://img.shields.io/badge/production-ready-green.svg)](https://github.com/jncss/skv)
-[![Test Coverage](https://img.shields.io/badge/coverage-81.8%25-brightgreen.svg)](https://github.com/jncss/skv)
-[![Tests Passing](https://img.shields.io/badge/tests-102%20passing-brightgreen.svg)](https://github.com/jncss/skv)
+[![Test Coverage](https://img.shields.io/badge/coverage-80.8%25-brightgreen.svg)](https://github.com/jncss/skv)
+[![Tests Passing](https://img.shields.io/badge/tests-122%20passing-brightgreen.svg)](https://github.com/jncss/skv)
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
 **Performance Metrics:**
@@ -13,7 +13,7 @@ A Go library for storing key/value data in a sequential binary file format.
 - 🔄 **365 updates/sec** - With automatic space reuse
 - 🧵 **1,900 ops/sec** - Concurrent operations (10 goroutines, race-free)
 - 📦 **37% reduction** - Average compaction savings
-- ✅ **102 tests** - All passing (76 functional + 26 stress/coverage tests)
+- ✅ **122 tests** - All passing (comprehensive coverage including streaming)
 
 ## Features
 
@@ -24,10 +24,13 @@ A Go library for storing key/value data in a sequential binary file format.
 - **Thread-safe** - All operations are protected with mutex locks for safe concurrent access within a single process
 - **Production-ready** - Stress tested with 10,000+ records and concurrent operations
 - **Backup/Restore** - JSON-based backups with smart encoding (text/base64) for portability
+- **Streaming operations** - Memory-efficient PutStream/GetStream for large values (no full memory load)
 - **Cross-platform** - Works on Linux, macOS, BSD, and Windows
 - **String convenience functions** - Direct string operations without byte conversion
 - **Batch operations** - Efficiently insert or retrieve multiple keys at once
 - **Iterator support** - ForEach for processing all key-value pairs
+- **File operations** - Direct file storage/retrieval with PutFile/GetFile/UpdateFile
+- **Command-line tool** - Full-featured CLI with 23 commands for database management
 - **Soft deletes** - Deleted records are marked with a flag (bit 7) preserving original type
 - **Last-write-wins** - When a key is updated, the new value is appended; Get returns the last active occurrence
 - **Compact operation** - Remove deleted records and duplicate keys to reduce file size
@@ -75,6 +78,64 @@ Padding bytes (0x80) may be added to fill small gaps that cannot hold a complete
 ```bash
 go get github.com/jncss/skv
 ```
+
+### Command Line Tool
+
+SKV includes a full-featured CLI tool for interacting with SKV databases from the command line.
+
+**Install the CLI:**
+
+```bash
+# Install globally
+go install github.com/jncss/skv/tools/cli@latest
+
+# Or build from source
+cd tools/cli
+go build -o skv .
+```
+
+**Quick CLI Examples:**
+
+```bash
+# Basic operations
+skv put mydb.skv username "alice"
+skv get mydb.skv username
+skv update mydb.skv username "bob"
+skv delete mydb.skv username
+
+# File operations
+skv putfile mydb.skv config config.ini
+skv getfile mydb.skv config retrieved.ini
+
+# Streaming (memory-efficient for large files)
+skv putstream mydb.skv video intro.mp4
+skv getstream mydb.skv video output.mp4
+
+# Batch operations
+skv putbatch mydb.skv key1 val1 key2 val2 key3 val3
+skv getbatch mydb.skv key1 key2 key3
+
+# Database management
+skv verify mydb.skv       # Check stats and health
+skv compact mydb.skv      # Optimize file size
+skv backup mydb.skv backup.json
+skv restore mydb.skv backup.json
+
+# List and iterate
+skv keys mydb.skv         # List all keys
+skv count mydb.skv        # Count active keys
+skv foreach mydb.skv      # Show all key=value pairs
+```
+
+**Available CLI Commands (23 total):**
+- **Basic**: `put`, `get`, `update`, `delete`, `exists`, `count`, `keys`, `clear`, `foreach`
+- **Files**: `putfile`, `getfile`, `updatefile`
+- **Streaming**: `putstream`, `getstream`, `updatestream` (memory-efficient for large files)
+- **Batch**: `putbatch`, `getbatch`
+- **Maintenance**: `backup`, `restore`, `verify`, `compact`
+- **Help**: `help`
+
+See [tools/cli/README.md](tools/cli/README.md) for complete CLI documentation with examples and use cases.
 
 ## Quick Start
 
@@ -396,6 +457,58 @@ db.PutString("username", "alice")
 name, _ := db.GetString("username")
 db.UpdateString("username", "alice_smith")
 ```
+
+### File Operations
+
+Store and retrieve files directly from the database:
+
+- `PutFile(key string, filePath string) error` - Store a file from disk
+- `GetFile(key string, filePath string) error` - Retrieve to a file on disk
+- `UpdateFile(key string, filePath string) error` - Update with file contents
+- `PutStream(key []byte, reader io.Reader, size int64) error` - Store value from a reader (memory-efficient)
+- `PutStreamString(key string, reader io.Reader, size int64) error` - Store using string key
+- `UpdateStream(key []byte, reader io.Reader, size int64) error` - Update value from a reader
+- `UpdateStreamString(key string, reader io.Reader, size int64) error` - Update using string key
+- `GetStream(key []byte, writer io.Writer) (int64, error)` - Stream value to a writer (memory-efficient)
+- `GetStreamString(key string, writer io.Writer) (int64, error)` - Stream value using string key
+
+**Example:**
+```go
+// Store a configuration file
+db.PutFile("config:app", "config.ini")
+
+// Retrieve it later
+db.GetFile("config:app", "retrieved_config.ini")
+
+// Update with new contents
+db.UpdateFile("config:app", "new_config.ini")
+
+// Stream large values efficiently (writing)
+file, _ := os.Open("large_video.mp4")
+defer file.Close()
+info, _ := file.Stat()
+db.PutStreamString("video:intro", file, info.Size())
+
+// Stream large values efficiently (reading)
+output, _ := os.Create("output.mp4")
+defer output.Close()
+n, _ := db.GetStreamString("video:intro", output)
+fmt.Printf("Streamed %d bytes\n", n)
+
+// Round-trip streaming (no memory load)
+reader := getDataReader() // some io.Reader
+db.PutStream([]byte("backup:data"), reader, dataSize)
+var buf bytes.Buffer
+db.GetStream([]byte("backup:data"), &buf)
+```
+
+**Use cases:**
+- Configuration file storage
+- Template management
+- Asset storage (images, CSS, JS)
+- Document archiving
+- Binary data storage
+- Large file streaming (videos, backups, logs)
 
 ### Backup and Restore
 

@@ -18,6 +18,20 @@ cd examples/02-advanced/batch_operations
 go run batch_operations.go
 ```
 
+### `file_operations/`
+Store and retrieve files directly:
+- **PutFile**: Store a file from disk into the database
+- **GetFile**: Retrieve a value and write it to a file
+- **UpdateFile**: Update an existing key with file contents
+- **Binary Support**: Works with text and binary files
+- **Use Cases**: Configuration files, templates, assets, documents
+
+**Run:**
+```bash
+cd examples/02-advanced/file_operations
+go run file_operations.go
+```
+
 ### `iteration/`
 Process all key-value pairs in the database:
 - **ForEachString**: Iterate over all entries with string callback
@@ -62,6 +76,29 @@ db.PutBatchString(users)
 // Retrieve multiple at once
 keys := []string{"user:1", "user:2"}
 results, _ := db.GetBatchString(keys)
+```
+
+### File Operations
+```go
+// Store a file in the database
+db.PutFile("config:app", "config.ini")
+
+// Retrieve file from database
+db.GetFile("config:app", "retrieved_config.ini")
+
+// Update with new file contents
+db.UpdateFile("config:app", "updated_config.ini")
+
+// Stream writing (memory-efficient for large files)
+file, _ := os.Open("large_video.mp4")
+info, _ := file.Stat()
+db.PutStreamString("video", file, info.Size())
+file.Close()
+
+// Stream reading (no full memory load)
+output, _ := os.Create("output.dat")
+defer output.Close()
+bytesWritten, _ := db.GetStreamString("video", output)
 ```
 
 ### Iteration
