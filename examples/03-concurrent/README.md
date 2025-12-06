@@ -16,7 +16,7 @@ Comprehensive concurrency demonstrations:
 - All SKV operations are thread-safe
 - No external locking required
 - Uses internal `sync.RWMutex` for goroutine-level safety
-- Uses file locking for process-level coordination
+- Designed for single-process use only
 
 **Run:**
 ```bash
@@ -25,17 +25,14 @@ go run concurrent.go
 
 ## Thread Safety Guarantees
 
-SKV provides **automatic thread safety** at two levels:
+SKV provides **automatic thread safety** for goroutine-level concurrency:
 
-### 1. Goroutine-level (within process)
+### Goroutine-level (within process)
 - `sync.RWMutex` protects all operations
 - Multiple goroutines can safely access the same SKV instance
 - No data races (verified with `go test -race`)
 
-### 2. Process-level (between processes)
-- File locking coordinates access between different processes
-- Shared locks for reads (concurrent readers allowed)
-- Exclusive locks for writes (serialized)
+**Note:** This library is designed for single-process use. Multiple processes accessing the same database file simultaneously is not supported and may result in data corruption.
 
 ## When to Use
 

@@ -35,3 +35,4 @@ After mastering these basics, explore:
 - **02-advanced/** - Batch operations, iteration, and maintenance
 - **03-concurrent/** - Thread-safe concurrent access
 - **04-usecases/** - Real-world application patterns
+- **06-fileformat/** - File format and header information

@@ -716,12 +716,14 @@ func TestCompactWithUpdates(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Add a key, update it multiple times
-	db.Put([]byte("key1"), []byte("value1"))
-	db.Update([]byte("key1"), []byte("value2"))
-	db.Update([]byte("key1"), []byte("value3"))
+	// Add a key, update it with progressively larger values
+	// This ensures new records are created (old space too small to reuse)
+	db.Put([]byte("key1"), []byte("v1"))
+	db.Update([]byte("key1"), []byte("value2-much-longer"))
+	db.Update([]byte("key1"), []byte("value3-even-longer-than-before"))
 
 	// Before compact, there should be 3 records (2 deleted + 1 current)
+	// because each update creates a new record (old space is too small)
 	stats, err := db.Verify()
 	if err != nil {
 		t.Fatalf("Error verifying before compact: %v", err)
@@ -758,8 +760,8 @@ func TestCompactWithUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error retrieving key1 after compact: %v", err)
 	}
-	if !bytes.Equal(value, []byte("value3")) {
-		t.Errorf("Expected value3, got: %s", value)
+	if !bytes.Equal(value, []byte("value3-even-longer-than-before")) {
+		t.Errorf("Expected value3-even-longer-than-before, got: %s", value)
 	}
 }
 

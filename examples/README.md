@@ -9,7 +9,9 @@ examples/
 ├── 01-basics/          # Basic operations and getting started
 ├── 02-advanced/        # Advanced features and optimization
 ├── 03-concurrent/      # Concurrency and thread-safety
-└── 04-usecases/        # Real-world use cases
+├── 04-usecases/        # Real-world use cases
+├── 05-backup/          # Backup and restore operations
+└── 06-fileformat/      # File format and header information
 ```
 
 ## Running Examples
@@ -107,6 +109,30 @@ Real-world use cases:
 - Namespaced keys
 
 **Perfect for**: Understanding practical applications
+
+### 💾 05-backup/ - Backup and Restore
+
+#### `demo.go`
+Backup and restore operations:
+- Creating JSON backups
+- Smart encoding (text vs base64)
+- Restoring from backup
+- Partial restoration (preserves keys not in backup)
+- Disaster recovery workflows
+- Human-readable backup format
+
+**Perfect for**: Data migration, disaster recovery, database inspection
+
+### 🔧 06-fileformat/ - File Format Details
+
+#### `demo.go`
+File format and header information:
+- SKV file header structure
+- Version information (Major.Minor.Patch)
+- Backward compatibility with old format
+- File size breakdown
+
+**Perfect for**: Understanding the file format internals
 
 ## Key Concepts Demonstrated
 
