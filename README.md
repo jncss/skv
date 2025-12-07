@@ -3,7 +3,7 @@
 A Go library for storing key/value data in a sequential binary file format.
 
 [![Production Ready](https://img.shields.io/badge/production-ready-green.svg)](https://github.com/jncss/skv)
-[![Test Coverage](https://img.shields.io/badge/coverage-79.1%25-green.svg)](https://github.com/jncss/skv)
+[![Test Coverage](https://img.shields.io/badge/coverage-80.5%25-green.svg)](https://github.com/jncss/skv)
 [![Tests Passing](https://img.shields.io/badge/tests-220%20passing-brightgreen.svg)](https://github.com/jncss/skv)
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
@@ -1092,6 +1092,7 @@ See [COMPRESSION.md](COMPRESSION.md) for detailed documentation including:
 ## Additional Documentation
 
 - **[WAL.md](WAL.md)** - Write-Ahead Log internals and crash recovery
+- **[LOGGING.md](LOGGING.md)** - Logging support
 - **[COMPRESSION.md](COMPRESSION.md)** - Compression algorithms and performance
 - **[CURSORS.md](CURSORS.md)** - Cursor iteration and range queries
 - **[TESTING.md](TESTING.md)** - Test coverage and methodology

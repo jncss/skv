@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Total tests**: Now 220 tests passing (217 previous + 3 string convenience tests)
-- **Test coverage**: 79.1% of statements
+- **Test coverage**: 80.5% of statements (improved from 79.1%)
 - **UpdateStream behavior**: Now writes new record before deleting old one (preserves original on failure)
 - **Concurrency model**: Read operations that only access cache now allow concurrent execution
 
