@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -68,21 +69,50 @@ func getRecordType(dataSize uint64) byte {
 func calculateRecordSize(keySize byte, dataSize uint64, recordType byte) uint64 {
 	baseType := getBaseType(recordType)
 	var dataSizeFieldSize uint64
+	var crcSize uint64
+
 	switch baseType {
 	case Type1Byte:
 		dataSizeFieldSize = 1
+		crcSize = 2 // CRC-16
 	case Type2Bytes:
 		dataSizeFieldSize = 2
+		crcSize = 4 // CRC-32
 	case Type4Bytes:
 		dataSizeFieldSize = 4
+		crcSize = 4 // CRC-32
 	case Type8Bytes:
 		dataSizeFieldSize = 8
+		crcSize = 4 // CRC-32
 	default:
 		dataSizeFieldSize = 1
+		crcSize = 2 // CRC-16
 	}
 
-	// type (1) + key_size (1) + key + data_size_field + data
-	return 1 + 1 + uint64(keySize) + dataSizeFieldSize + dataSize
+	// type (1) + key_size (1) + key + data_size_field + data + crc
+	return 1 + 1 + uint64(keySize) + dataSizeFieldSize + dataSize + crcSize
+}
+
+// calculateCRC16 calculates CRC-16 for the given data
+func calculateCRC16(data []byte) uint16 {
+	// Simple CRC-16-CCITT implementation
+	var crc uint16 = 0xFFFF
+	for _, b := range data {
+		crc ^= uint16(b) << 8
+		for i := 0; i < 8; i++ {
+			if crc&0x8000 != 0 {
+				crc = (crc << 1) ^ 0x1021
+			} else {
+				crc = crc << 1
+			}
+		}
+	}
+	return crc
+}
+
+// calculateCRC32 calculates CRC-32 for the given data using IEEE polynomial
+func calculateCRC32(data []byte) uint32 {
+	return crc32.ChecksumIEEE(data)
 }
 
 // skipPaddingBytes skips any padding bytes (0x80) at the current file position
@@ -304,53 +334,58 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 		return 0, fmt.Errorf("error getting current position: %w", err)
 	}
 
+	// Build the complete record in memory for CRC calculation
+	var recordBuf []byte
+
 	// Write the type
-	if _, err := s.file.Write([]byte{recordType}); err != nil {
-		return 0, fmt.Errorf("error writing type: %w", err)
-	}
+	recordBuf = append(recordBuf, recordType)
 
 	// Write the key size
 	keySize := byte(len(key))
-	if _, err := s.file.Write([]byte{keySize}); err != nil {
-		return 0, fmt.Errorf("error writing key size: %w", err)
-	}
+	recordBuf = append(recordBuf, keySize)
 
 	// Write the key
-	if _, err := s.file.Write(key); err != nil {
-		return 0, fmt.Errorf("error writing key: %w", err)
-	}
+	recordBuf = append(recordBuf, key...)
 
 	// Write the data size according to the type
 	switch recordType {
 	case Type1Byte:
-		if _, err := s.file.Write([]byte{byte(dataSize)}); err != nil {
-			return 0, fmt.Errorf("error writing data size: %w", err)
-		}
+		recordBuf = append(recordBuf, byte(dataSize))
 	case Type2Bytes:
 		buf := make([]byte, 2)
 		binary.LittleEndian.PutUint16(buf, uint16(dataSize))
-		if _, err := s.file.Write(buf); err != nil {
-			return 0, fmt.Errorf("error writing data size: %w", err)
-		}
+		recordBuf = append(recordBuf, buf...)
 	case Type4Bytes:
 		buf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(buf, uint32(dataSize))
-		if _, err := s.file.Write(buf); err != nil {
-			return 0, fmt.Errorf("error writing data size: %w", err)
-		}
+		recordBuf = append(recordBuf, buf...)
 	case Type8Bytes:
 		buf := make([]byte, 8)
 		binary.LittleEndian.PutUint64(buf, dataSize)
-		if _, err := s.file.Write(buf); err != nil {
-			return 0, fmt.Errorf("error writing data size: %w", err)
-		}
+		recordBuf = append(recordBuf, buf...)
 	}
 
 	// Write the data
-	if len(data) > 0 {
-		if _, err := s.file.Write(data); err != nil {
-			return 0, fmt.Errorf("error writing data: %w", err)
-		}
+	recordBuf = append(recordBuf, data...)
+
+	// Calculate and append CRC
+	if recordType == Type1Byte {
+		// CRC-16 for Type1Byte
+		crc := calculateCRC16(recordBuf)
+		crcBuf := make([]byte, 2)
+		binary.LittleEndian.PutUint16(crcBuf, crc)
+		recordBuf = append(recordBuf, crcBuf...)
+	} else {
+		// CRC-32 for other types
+		crc := calculateCRC32(recordBuf)
+		crcBuf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(crcBuf, crc)
+		recordBuf = append(recordBuf, crcBuf...)
+	}
+
+	// Write the complete record to file
+	if _, err := s.file.Write(recordBuf); err != nil {
+		return 0, fmt.Errorf("error writing record: %w", err)
 	}
 
 	// Sync to disk
@@ -434,6 +469,9 @@ func (s *SKV) writeRecord(key []byte, data []byte) (int64, error) {
 // If readData is false, the data portion is skipped for efficiency
 // Returns: recordType, key, data, recordSize, error
 func (s *SKV) readRecord(readData bool) (recordType byte, key []byte, data []byte, recordSize uint64, err error) {
+	// Buffer to accumulate record bytes for CRC verification
+	var recordBuf []byte
+
 	// Read type
 	typeBuf := make([]byte, 1)
 	if _, err := io.ReadFull(s.file, typeBuf); err != nil {
@@ -443,6 +481,7 @@ func (s *SKV) readRecord(readData bool) (recordType byte, key []byte, data []byt
 		return 0, nil, nil, 0, fmt.Errorf("error reading type: %w", err)
 	}
 	recordType = typeBuf[0]
+	recordBuf = append(recordBuf, typeBuf...)
 
 	// Read key size
 	keySizeBuf := make([]byte, 1)
@@ -450,61 +489,95 @@ func (s *SKV) readRecord(readData bool) (recordType byte, key []byte, data []byt
 		return 0, nil, nil, 0, fmt.Errorf("error reading key size: %w", err)
 	}
 	keySize := keySizeBuf[0]
+	recordBuf = append(recordBuf, keySizeBuf...)
 
 	// Read key
 	key = make([]byte, keySize)
 	if _, err := io.ReadFull(s.file, key); err != nil {
 		return 0, nil, nil, 0, fmt.Errorf("error reading key: %w", err)
 	}
+	recordBuf = append(recordBuf, key...)
 
 	// Read data size
 	baseType := getBaseType(recordType)
 	var dataSize uint64
+	var dataSizeBuf []byte
+
 	switch baseType {
 	case Type1Byte:
-		buf := make([]byte, 1)
-		if _, err := io.ReadFull(s.file, buf); err != nil {
+		dataSizeBuf = make([]byte, 1)
+		if _, err := io.ReadFull(s.file, dataSizeBuf); err != nil {
 			return 0, nil, nil, 0, fmt.Errorf("error reading data size: %w", err)
 		}
-		dataSize = uint64(buf[0])
+		dataSize = uint64(dataSizeBuf[0])
 	case Type2Bytes:
-		buf := make([]byte, 2)
-		if _, err := io.ReadFull(s.file, buf); err != nil {
+		dataSizeBuf = make([]byte, 2)
+		if _, err := io.ReadFull(s.file, dataSizeBuf); err != nil {
 			return 0, nil, nil, 0, fmt.Errorf("error reading data size: %w", err)
 		}
-		dataSize = uint64(binary.LittleEndian.Uint16(buf))
+		dataSize = uint64(binary.LittleEndian.Uint16(dataSizeBuf))
 	case Type4Bytes:
-		buf := make([]byte, 4)
-		if _, err := io.ReadFull(s.file, buf); err != nil {
+		dataSizeBuf = make([]byte, 4)
+		if _, err := io.ReadFull(s.file, dataSizeBuf); err != nil {
 			return 0, nil, nil, 0, fmt.Errorf("error reading data size: %w", err)
 		}
-		dataSize = uint64(binary.LittleEndian.Uint32(buf))
+		dataSize = uint64(binary.LittleEndian.Uint32(dataSizeBuf))
 	case Type8Bytes:
-		buf := make([]byte, 8)
-		if _, err := io.ReadFull(s.file, buf); err != nil {
+		dataSizeBuf = make([]byte, 8)
+		if _, err := io.ReadFull(s.file, dataSizeBuf); err != nil {
 			return 0, nil, nil, 0, fmt.Errorf("error reading data size: %w", err)
 		}
-		dataSize = binary.LittleEndian.Uint64(buf)
+		dataSize = binary.LittleEndian.Uint64(dataSizeBuf)
 	default:
 		return 0, nil, nil, 0, fmt.Errorf("unknown record type: 0x%02X", recordType)
 	}
+	recordBuf = append(recordBuf, dataSizeBuf...)
 
 	// Calculate total record size
 	recordSize = calculateRecordSize(keySize, dataSize, recordType)
 
-	// Read or skip data depending on readData parameter
+	// Read data
+	// Always read data for CRC verification, even if readData is false
+	tempData := make([]byte, dataSize)
+	if dataSize > 0 {
+		if _, err := io.ReadFull(s.file, tempData); err != nil {
+			return 0, nil, nil, 0, fmt.Errorf("error reading data: %w", err)
+		}
+	}
+	recordBuf = append(recordBuf, tempData...)
+
+	// Only return data if requested
 	if readData {
-		data = make([]byte, dataSize)
-		if dataSize > 0 {
-			if _, err := io.ReadFull(s.file, data); err != nil {
-				return 0, nil, nil, 0, fmt.Errorf("error reading data: %w", err)
+		data = tempData
+	}
+
+	// Read and verify CRC (skip verification for deleted records since type byte was modified)
+	if baseType == Type1Byte {
+		// CRC-16
+		crcBuf := make([]byte, 2)
+		if _, err := io.ReadFull(s.file, crcBuf); err != nil {
+			return 0, nil, nil, 0, fmt.Errorf("error reading CRC: %w", err)
+		}
+		// Only verify CRC for active records
+		if !isDeleted(recordType) {
+			storedCRC := binary.LittleEndian.Uint16(crcBuf)
+			calculatedCRC := calculateCRC16(recordBuf)
+			if storedCRC != calculatedCRC {
+				return 0, nil, nil, 0, fmt.Errorf("CRC mismatch: expected 0x%04X, got 0x%04X (record may be corrupted)", storedCRC, calculatedCRC)
 			}
 		}
 	} else {
-		// Skip data by seeking forward for efficiency
-		if dataSize > 0 {
-			if _, err := s.file.Seek(int64(dataSize), io.SeekCurrent); err != nil {
-				return 0, nil, nil, 0, fmt.Errorf("error skipping data: %w", err)
+		// CRC-32
+		crcBuf := make([]byte, 4)
+		if _, err := io.ReadFull(s.file, crcBuf); err != nil {
+			return 0, nil, nil, 0, fmt.Errorf("error reading CRC: %w", err)
+		}
+		// Only verify CRC for active records
+		if !isDeleted(recordType) {
+			storedCRC := binary.LittleEndian.Uint32(crcBuf)
+			calculatedCRC := calculateCRC32(recordBuf)
+			if storedCRC != calculatedCRC {
+				return 0, nil, nil, 0, fmt.Errorf("CRC mismatch: expected 0x%08X, got 0x%08X (record may be corrupted)", storedCRC, calculatedCRC)
 			}
 		}
 	}
@@ -743,8 +816,8 @@ func (s *SKV) deleteInternal(key []byte) error {
 		return fmt.Errorf("error seeking to record position: %w", err)
 	}
 
-	// Read the record to get its size
-	recordType, _, _, recordSize, err := s.readRecord(true)
+	// Read the record to get its size (CRC verification will fail after we modify type byte, but that's ok)
+	recordType, _, _, recordSize, err := s.readRecord(false)
 	if err != nil {
 		return fmt.Errorf("error reading record: %w", err)
 	}
@@ -752,7 +825,7 @@ func (s *SKV) deleteInternal(key []byte) error {
 	// Set the deleted bit
 	deletedType := recordType | DeletedFlag
 
-	// Go back to overwrite the type
+	// Go back to overwrite just the type byte
 	if _, err := s.file.Seek(position, io.SeekStart); err != nil {
 		return fmt.Errorf("error seeking to type position: %w", err)
 	}
@@ -975,6 +1048,9 @@ func (s *SKV) compactInternal() error {
 			return fmt.Errorf("error getting position in temp file: %w", err)
 		}
 
+		// Build complete record in memory for CRC calculation
+		var recordBuf []byte
+
 		// Determine the type based on the data size
 		var recordType byte
 		dataSize := uint64(len(kd.data))
@@ -990,59 +1066,56 @@ func (s *SKV) compactInternal() error {
 			recordType = Type8Bytes
 		}
 
-		// Write the type
-		if _, err := tmpFile.Write([]byte{recordType}); err != nil {
-			tmpFile.Close()
-			return fmt.Errorf("error writing type to temp file: %w", err)
-		}
+		// Append the type
+		recordBuf = append(recordBuf, recordType)
 
-		// Write the key size
+		// Append the key size
 		keySize := byte(len(kd.key))
-		if _, err := tmpFile.Write([]byte{keySize}); err != nil {
-			tmpFile.Close()
-			return fmt.Errorf("error writing key size to temp file: %w", err)
-		}
+		recordBuf = append(recordBuf, keySize)
 
-		// Write the key
-		if _, err := tmpFile.Write(kd.key); err != nil {
-			tmpFile.Close()
-			return fmt.Errorf("error writing key to temp file: %w", err)
-		}
+		// Append the key
+		recordBuf = append(recordBuf, kd.key...)
 
-		// Write the data size according to the type
+		// Append the data size according to the type
 		switch recordType {
 		case Type1Byte:
-			if _, err := tmpFile.Write([]byte{byte(dataSize)}); err != nil {
-				tmpFile.Close()
-				return fmt.Errorf("error writing data size to temp file: %w", err)
-			}
+			recordBuf = append(recordBuf, byte(dataSize))
 		case Type2Bytes:
 			buf := make([]byte, 2)
 			binary.LittleEndian.PutUint16(buf, uint16(dataSize))
-			if _, err := tmpFile.Write(buf); err != nil {
-				tmpFile.Close()
-				return fmt.Errorf("error writing data size to temp file: %w", err)
-			}
+			recordBuf = append(recordBuf, buf...)
 		case Type4Bytes:
 			buf := make([]byte, 4)
 			binary.LittleEndian.PutUint32(buf, uint32(dataSize))
-			if _, err := tmpFile.Write(buf); err != nil {
-				tmpFile.Close()
-				return fmt.Errorf("error writing data size to temp file: %w", err)
-			}
+			recordBuf = append(recordBuf, buf...)
 		case Type8Bytes:
 			buf := make([]byte, 8)
 			binary.LittleEndian.PutUint64(buf, dataSize)
-			if _, err := tmpFile.Write(buf); err != nil {
-				tmpFile.Close()
-				return fmt.Errorf("error writing data size to temp file: %w", err)
-			}
+			recordBuf = append(recordBuf, buf...)
 		}
 
-		// Write the data
-		if _, err := tmpFile.Write(kd.data); err != nil {
+		// Append the data
+		recordBuf = append(recordBuf, kd.data...)
+
+		// Calculate and append CRC
+		if recordType == Type1Byte {
+			// CRC-16
+			crc := calculateCRC16(recordBuf)
+			crcBuf := make([]byte, 2)
+			binary.LittleEndian.PutUint16(crcBuf, crc)
+			recordBuf = append(recordBuf, crcBuf...)
+		} else {
+			// CRC-32
+			crc := calculateCRC32(recordBuf)
+			crcBuf := make([]byte, 4)
+			binary.LittleEndian.PutUint32(crcBuf, crc)
+			recordBuf = append(recordBuf, crcBuf...)
+		}
+
+		// Write complete record to temp file
+		if _, err := tmpFile.Write(recordBuf); err != nil {
 			tmpFile.Close()
-			return fmt.Errorf("error writing data to temp file: %w", err)
+			return fmt.Errorf("error writing record to temp file: %w", err)
 		}
 
 		newCache[string(kd.key)] = pos
@@ -1643,49 +1716,51 @@ func (s *SKV) writeRecordStream(key []byte, reader io.Reader, dataSize uint64) (
 		}
 	}
 
+	// Initialize CRC calculation
+	var crcData []byte
+
 	// Write the type
-	if _, err := s.file.Write([]byte{recordType}); err != nil {
+	typeBuf := []byte{recordType}
+	if _, err := s.file.Write(typeBuf); err != nil {
 		return 0, fmt.Errorf("error writing type: %w", err)
 	}
+	crcData = append(crcData, typeBuf...)
 
 	// Write the key size
 	keySize := byte(len(key))
-	if _, err := s.file.Write([]byte{keySize}); err != nil {
+	keySizeBuf := []byte{keySize}
+	if _, err := s.file.Write(keySizeBuf); err != nil {
 		return 0, fmt.Errorf("error writing key size: %w", err)
 	}
+	crcData = append(crcData, keySizeBuf...)
 
 	// Write the key
 	if _, err := s.file.Write(key); err != nil {
 		return 0, fmt.Errorf("error writing key: %w", err)
 	}
+	crcData = append(crcData, key...)
 
 	// Write the data size according to the type
+	var dataSizeBuf []byte
 	switch recordType {
 	case Type1Byte:
-		if _, err := s.file.Write([]byte{byte(dataSize)}); err != nil {
-			return 0, fmt.Errorf("error writing data size: %w", err)
-		}
+		dataSizeBuf = []byte{byte(dataSize)}
 	case Type2Bytes:
-		buf := make([]byte, 2)
-		binary.LittleEndian.PutUint16(buf, uint16(dataSize))
-		if _, err := s.file.Write(buf); err != nil {
-			return 0, fmt.Errorf("error writing data size: %w", err)
-		}
+		dataSizeBuf = make([]byte, 2)
+		binary.LittleEndian.PutUint16(dataSizeBuf, uint16(dataSize))
 	case Type4Bytes:
-		buf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(buf, uint32(dataSize))
-		if _, err := s.file.Write(buf); err != nil {
-			return 0, fmt.Errorf("error writing data size: %w", err)
-		}
+		dataSizeBuf = make([]byte, 4)
+		binary.LittleEndian.PutUint32(dataSizeBuf, uint32(dataSize))
 	case Type8Bytes:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, dataSize)
-		if _, err := s.file.Write(buf); err != nil {
-			return 0, fmt.Errorf("error writing data size: %w", err)
-		}
+		dataSizeBuf = make([]byte, 8)
+		binary.LittleEndian.PutUint64(dataSizeBuf, dataSize)
 	}
+	if _, err := s.file.Write(dataSizeBuf); err != nil {
+		return 0, fmt.Errorf("error writing data size: %w", err)
+	}
+	crcData = append(crcData, dataSizeBuf...)
 
-	// Stream the data from reader in chunks
+	// Stream the data from reader in chunks and accumulate for CRC
 	const bufferSize = 64 * 1024 // 64KB buffer
 	var totalRead int64
 	remaining := dataSize
@@ -1713,6 +1788,9 @@ func (s *SKV) writeRecordStream(key []byte, reader io.Reader, dataSize uint64) (
 			return 0, fmt.Errorf("incomplete write: expected %d, wrote %d", n, written)
 		}
 
+		// Accumulate data for CRC calculation
+		crcData = append(crcData, chunk[:n]...)
+
 		totalRead += int64(n)
 		remaining -= uint64(n)
 	}
@@ -1722,6 +1800,25 @@ func (s *SKV) writeRecordStream(key []byte, reader io.Reader, dataSize uint64) (
 	n, err := reader.Read(extraCheck)
 	if err == nil && n > 0 {
 		return 0, fmt.Errorf("reader provided more data than specified size: expected %d bytes", dataSize)
+	}
+
+	// Calculate and write CRC
+	if recordType == Type1Byte {
+		// CRC-16
+		crc := calculateCRC16(crcData)
+		crcBuf := make([]byte, 2)
+		binary.LittleEndian.PutUint16(crcBuf, crc)
+		if _, err := s.file.Write(crcBuf); err != nil {
+			return 0, fmt.Errorf("error writing CRC: %w", err)
+		}
+	} else {
+		// CRC-32
+		crc := calculateCRC32(crcData)
+		crcBuf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(crcBuf, crc)
+		if _, err := s.file.Write(crcBuf); err != nil {
+			return 0, fmt.Errorf("error writing CRC: %w", err)
+		}
 	}
 
 	// Sync to disk
@@ -1754,12 +1851,16 @@ func (s *SKV) GetStream(key []byte, writer io.Writer) (int64, error) {
 		return 0, fmt.Errorf("error seeking to position: %w", err)
 	}
 
+	// Initialize CRC calculation
+	var crcData []byte
+
 	// Read record type
 	typeBuf := make([]byte, 1)
 	if _, err := io.ReadFull(s.file, typeBuf); err != nil {
 		return 0, fmt.Errorf("error reading type: %w", err)
 	}
 	recordType := typeBuf[0]
+	crcData = append(crcData, typeBuf...)
 
 	// Read key size
 	keySizeBuf := make([]byte, 1)
@@ -1767,43 +1868,49 @@ func (s *SKV) GetStream(key []byte, writer io.Writer) (int64, error) {
 		return 0, fmt.Errorf("error reading key size: %w", err)
 	}
 	keySize := keySizeBuf[0]
+	crcData = append(crcData, keySizeBuf...)
 
-	// Skip the key
-	if _, err := s.file.Seek(int64(keySize), io.SeekCurrent); err != nil {
-		return 0, fmt.Errorf("error skipping key: %w", err)
+	// Read the key (need it for CRC)
+	keyData := make([]byte, keySize)
+	if _, err := io.ReadFull(s.file, keyData); err != nil {
+		return 0, fmt.Errorf("error reading key: %w", err)
 	}
+	crcData = append(crcData, keyData...)
 
 	// Read data size
 	baseType := getBaseType(recordType)
 	var dataSize uint64
+	var dataSizeBuf []byte
+
 	switch baseType {
 	case Type1Byte:
-		buf := make([]byte, 1)
-		if _, err := io.ReadFull(s.file, buf); err != nil {
+		dataSizeBuf = make([]byte, 1)
+		if _, err := io.ReadFull(s.file, dataSizeBuf); err != nil {
 			return 0, fmt.Errorf("error reading data size: %w", err)
 		}
-		dataSize = uint64(buf[0])
+		dataSize = uint64(dataSizeBuf[0])
 	case Type2Bytes:
-		buf := make([]byte, 2)
-		if _, err := io.ReadFull(s.file, buf); err != nil {
+		dataSizeBuf = make([]byte, 2)
+		if _, err := io.ReadFull(s.file, dataSizeBuf); err != nil {
 			return 0, fmt.Errorf("error reading data size: %w", err)
 		}
-		dataSize = uint64(binary.LittleEndian.Uint16(buf))
+		dataSize = uint64(binary.LittleEndian.Uint16(dataSizeBuf))
 	case Type4Bytes:
-		buf := make([]byte, 4)
-		if _, err := io.ReadFull(s.file, buf); err != nil {
+		dataSizeBuf = make([]byte, 4)
+		if _, err := io.ReadFull(s.file, dataSizeBuf); err != nil {
 			return 0, fmt.Errorf("error reading data size: %w", err)
 		}
-		dataSize = uint64(binary.LittleEndian.Uint32(buf))
+		dataSize = uint64(binary.LittleEndian.Uint32(dataSizeBuf))
 	case Type8Bytes:
-		buf := make([]byte, 8)
-		if _, err := io.ReadFull(s.file, buf); err != nil {
+		dataSizeBuf = make([]byte, 8)
+		if _, err := io.ReadFull(s.file, dataSizeBuf); err != nil {
 			return 0, fmt.Errorf("error reading data size: %w", err)
 		}
-		dataSize = binary.LittleEndian.Uint64(buf)
+		dataSize = binary.LittleEndian.Uint64(dataSizeBuf)
 	default:
 		return 0, fmt.Errorf("unknown record type: 0x%02X", recordType)
 	}
+	crcData = append(crcData, dataSizeBuf...)
 
 	// Stream the data in chunks to avoid loading everything into memory
 	const bufferSize = 64 * 1024 // 64KB buffer
@@ -1822,6 +1929,9 @@ func (s *SKV) GetStream(key []byte, writer io.Writer) (int64, error) {
 			return totalWritten, fmt.Errorf("error reading data chunk: %w", err)
 		}
 
+		// Accumulate for CRC
+		crcData = append(crcData, chunk[:n]...)
+
 		written, err := writer.Write(chunk[:n])
 		if err != nil {
 			return totalWritten, fmt.Errorf("error writing to stream: %w", err)
@@ -1829,6 +1939,31 @@ func (s *SKV) GetStream(key []byte, writer io.Writer) (int64, error) {
 
 		totalWritten += int64(written)
 		remaining -= uint64(n)
+	}
+
+	// Read and verify CRC
+	if baseType == Type1Byte {
+		// CRC-16
+		crcBuf := make([]byte, 2)
+		if _, err := io.ReadFull(s.file, crcBuf); err != nil {
+			return totalWritten, fmt.Errorf("error reading CRC: %w", err)
+		}
+		storedCRC := binary.LittleEndian.Uint16(crcBuf)
+		calculatedCRC := calculateCRC16(crcData)
+		if storedCRC != calculatedCRC {
+			return totalWritten, fmt.Errorf("CRC mismatch: expected 0x%04X, got 0x%04X (record may be corrupted)", storedCRC, calculatedCRC)
+		}
+	} else {
+		// CRC-32
+		crcBuf := make([]byte, 4)
+		if _, err := io.ReadFull(s.file, crcBuf); err != nil {
+			return totalWritten, fmt.Errorf("error reading CRC: %w", err)
+		}
+		storedCRC := binary.LittleEndian.Uint32(crcBuf)
+		calculatedCRC := calculateCRC32(crcData)
+		if storedCRC != calculatedCRC {
+			return totalWritten, fmt.Errorf("CRC mismatch: expected 0x%08X, got 0x%08X (record may be corrupted)", storedCRC, calculatedCRC)
+		}
 	}
 
 	return totalWritten, nil

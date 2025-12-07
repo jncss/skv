@@ -72,6 +72,16 @@ Understanding the SKV file format internals.
 
 ---
 
+### [07-integrity](07-integrity/) - Data Integrity
+CRC checksum verification for corruption detection.
+
+**Examples:**
+- `crc_verification/` - Automatic CRC-16/32 verification on reads and writes
+
+**Key Topics:** Data integrity, CRC checksums, corruption detection, Verify()
+
+---
+
 ## 🚀 Quick Start
 
 ```bash
@@ -101,7 +111,8 @@ go run batch_operations.go
 2. **02-advanced/maintenance** - Keep database optimized
 3. **03-concurrent** - Safe multi-threaded access
 4. **05-backup** - Protect your data
-5. **06-fileformat** - Understand internals
+5. **07-integrity** - Verify data integrity with CRC
+6. **06-fileformat** - Understand internals
 
 ## 🎯 Common Patterns
 

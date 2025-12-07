@@ -778,3 +778,290 @@ func handleCompact() {
 	fmt.Printf("Size after:  %d bytes (%.2f MB)\n", sizeAfter, float64(sizeAfter)/1024/1024)
 	fmt.Printf("Saved:       %d bytes (%.2f MB, %.1f%%)\n", saved, float64(saved)/1024/1024, savedPercent)
 }
+
+func handleRecover() {
+	if len(os.Args) < 4 {
+		fmt.Fprintf(os.Stderr, "Usage: skv recover <corrupted.skv> <recovered.skv>\n")
+		os.Exit(1)
+	}
+
+	corruptedFile := os.Args[2]
+	recoveredFile := os.Args[3]
+
+	// Check if corrupted file exists
+	if _, err := os.Stat(corruptedFile); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error: File '%s' does not exist\n", corruptedFile)
+		os.Exit(1)
+	}
+
+	// Check if recovered file already exists
+	if _, err := os.Stat(recoveredFile); err == nil {
+		fmt.Fprintf(os.Stderr, "Error: Output file '%s' already exists\n", recoveredFile)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Attempting to recover records from '%s'...\n", corruptedFile)
+
+	// Open corrupted file for reading
+	inFile, err := os.Open(corruptedFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening corrupted file: %v\n", err)
+		os.Exit(1)
+	}
+	defer inFile.Close()
+
+	// Get file size
+	fileInfo, err := inFile.Stat()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting file info: %v\n", err)
+		os.Exit(1)
+	}
+	fileSize := fileInfo.Size()
+
+	// Read entire file into memory
+	fileData := make([]byte, fileSize)
+	_, err = inFile.Read(fileData)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+		os.Exit(1)
+	}
+	inFile.Close()
+
+	// Create new database for recovered records
+	recoveredDB, err := skv.Open(recoveredFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating recovered database: %v\n", err)
+		os.Exit(1)
+	}
+	defer recoveredDB.Close()
+
+	recoveredCount := 0
+	skippedCount := 0
+	position := int64(0)
+
+	// Skip header if present (6 bytes: "SKV" + version)
+	if fileSize >= 6 && string(fileData[0:3]) == "SKV" {
+		position = 6
+		fmt.Println("Found valid SKV header, skipping...")
+	}
+
+	fmt.Printf("Scanning %d bytes for valid records...\n", fileSize)
+
+	// Scan byte by byte looking for potential record starts
+	for position < fileSize {
+		typeByte := fileData[position]
+		baseType := typeByte & 0x0F // Remove deleted flag
+
+		// Check if this could be a valid type byte
+		if baseType != 0x01 && baseType != 0x02 && baseType != 0x04 && baseType != 0x08 {
+			position++
+			continue
+		}
+
+		// Try to parse as a record (pass fileSize for sanity checking)
+		record, recordSize, err := tryParseRecord(fileData, position, fileSize)
+		if err != nil {
+			// Not a valid record, continue scanning
+			position++
+			skippedCount++
+			continue
+		}
+
+		// Valid record found! Save it to recovered database
+		if record.deleted {
+			// Skip deleted records
+			position += recordSize
+			skippedCount++
+			continue
+		}
+
+		err = recoveredDB.Put(record.key, record.data)
+		if err != nil {
+			// If key exists, try to update
+			err = recoveredDB.Update(record.key, record.data)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Could not save record at position %d: %v\n", position, err)
+			}
+		}
+
+		recoveredCount++
+		if recoveredCount%100 == 0 {
+			fmt.Printf("  Recovered %d records...\n", recoveredCount)
+		}
+
+		position += recordSize
+	}
+
+	fmt.Printf("\n✓ Recovery complete\n")
+	fmt.Printf("  Total records recovered: %d\n", recoveredCount)
+	fmt.Printf("  Invalid bytes skipped: %d\n", skippedCount)
+	fmt.Printf("  Recovered database: %s\n", recoveredFile)
+}
+
+// recordInfo holds information about a recovered record
+type recordInfo struct {
+	key     []byte
+	data    []byte
+	deleted bool
+}
+
+// tryParseRecord attempts to parse a record starting at the given position
+func tryParseRecord(fileData []byte, pos int64, fileSize int64) (*recordInfo, int64, error) {
+	if pos >= int64(len(fileData)) {
+		return nil, 0, fmt.Errorf("position beyond file end")
+	}
+
+	originalPos := pos
+	typeByte := fileData[pos]
+	baseType := typeByte & 0x0F
+	deleted := (typeByte & 0x80) != 0
+	pos++
+
+	// Read key size
+	if pos >= int64(len(fileData)) {
+		return nil, 0, fmt.Errorf("incomplete key size")
+	}
+	keySize := int(fileData[pos])
+	pos++
+
+	// Read key
+	if pos+int64(keySize) > int64(len(fileData)) {
+		return nil, 0, fmt.Errorf("incomplete key")
+	}
+	key := make([]byte, keySize)
+	copy(key, fileData[pos:pos+int64(keySize)])
+	pos += int64(keySize)
+
+	// Read data size based on type
+	var dataSize uint64
+	switch baseType {
+	case 0x01:
+		if pos >= int64(len(fileData)) {
+			return nil, 0, fmt.Errorf("incomplete data size")
+		}
+		dataSize = uint64(fileData[pos])
+		pos++
+	case 0x02:
+		if pos+2 > int64(len(fileData)) {
+			return nil, 0, fmt.Errorf("incomplete data size")
+		}
+		dataSize = uint64(fileData[pos]) | uint64(fileData[pos+1])<<8
+		pos += 2
+	case 0x04:
+		if pos+4 > int64(len(fileData)) {
+			return nil, 0, fmt.Errorf("incomplete data size")
+		}
+		dataSize = uint64(fileData[pos]) | uint64(fileData[pos+1])<<8 |
+			uint64(fileData[pos+2])<<16 | uint64(fileData[pos+3])<<24
+		pos += 4
+	case 0x08:
+		if pos+8 > int64(len(fileData)) {
+			return nil, 0, fmt.Errorf("incomplete data size")
+		}
+		dataSize = uint64(fileData[pos]) | uint64(fileData[pos+1])<<8 |
+			uint64(fileData[pos+2])<<16 | uint64(fileData[pos+3])<<24 |
+			uint64(fileData[pos+4])<<32 | uint64(fileData[pos+5])<<40 |
+			uint64(fileData[pos+6])<<48 | uint64(fileData[pos+7])<<56
+		pos += 8
+	default:
+		return nil, 0, fmt.Errorf("invalid type byte")
+	}
+
+	// Sanity check: data size cannot exceed remaining file size
+	// This prevents trying to allocate huge amounts of memory for corrupted data
+	remainingBytes := fileSize - pos
+	if int64(dataSize) > remainingBytes {
+		return nil, 0, fmt.Errorf("data size %d exceeds remaining file size %d", dataSize, remainingBytes)
+	}
+
+	// Read data
+	if pos+int64(dataSize) > int64(len(fileData)) {
+		return nil, 0, fmt.Errorf("incomplete data")
+	}
+	data := make([]byte, dataSize)
+	copy(data, fileData[pos:pos+int64(dataSize)])
+	pos += int64(dataSize)
+
+	// Read and verify CRC
+	var crcSize int64
+	if baseType == 0x01 {
+		crcSize = 2
+	} else {
+		crcSize = 4
+	}
+
+	if pos+crcSize > int64(len(fileData)) {
+		return nil, 0, fmt.Errorf("incomplete CRC")
+	}
+
+	// Build record for CRC calculation
+	recordBuf := make([]byte, 0, pos-originalPos-crcSize)
+	recordBuf = append(recordBuf, fileData[originalPos:pos]...)
+
+	// Read stored CRC
+	var storedCRC uint32
+	if baseType == 0x01 {
+		storedCRC = uint32(fileData[pos]) | uint32(fileData[pos+1])<<8
+	} else {
+		storedCRC = uint32(fileData[pos]) | uint32(fileData[pos+1])<<8 |
+			uint32(fileData[pos+2])<<16 | uint32(fileData[pos+3])<<24
+	}
+	pos += crcSize
+
+	// Calculate CRC
+	var calculatedCRC uint32
+	if baseType == 0x01 {
+		calculatedCRC = uint32(calculateCRC16(recordBuf))
+	} else {
+		calculatedCRC = calculateCRC32(recordBuf)
+	}
+
+	// Verify CRC (only for non-deleted records)
+	if !deleted && storedCRC != calculatedCRC {
+		return nil, 0, fmt.Errorf("CRC mismatch")
+	}
+
+	recordSize := pos - originalPos
+	return &recordInfo{
+		key:     key,
+		data:    data,
+		deleted: deleted,
+	}, recordSize, nil
+}
+
+// calculateCRC16 calculates CRC-16-CCITT
+func calculateCRC16(data []byte) uint16 {
+	crc := uint16(0xFFFF)
+	for _, b := range data {
+		crc ^= uint16(b) << 8
+		for i := 0; i < 8; i++ {
+			if crc&0x8000 != 0 {
+				crc = (crc << 1) ^ 0x1021
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc
+}
+
+// calculateCRC32 calculates CRC-32-IEEE
+func calculateCRC32(data []byte) uint32 {
+	return crc32IEEE(data)
+}
+
+// crc32IEEE implements CRC-32-IEEE polynomial
+func crc32IEEE(data []byte) uint32 {
+	crc := uint32(0xFFFFFFFF)
+	for _, b := range data {
+		crc ^= uint32(b)
+		for i := 0; i < 8; i++ {
+			if crc&1 != 0 {
+				crc = (crc >> 1) ^ 0xEDB88320
+			} else {
+				crc >>= 1
+			}
+		}
+	}
+	return ^crc
+}

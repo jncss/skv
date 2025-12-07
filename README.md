@@ -3,7 +3,7 @@
 A Go library for storing key/value data in a sequential binary file format.
 
 [![Production Ready](https://img.shields.io/badge/production-ready-green.svg)](https://github.com/jncss/skv)
-[![Test Coverage](https://img.shields.io/badge/coverage-78.2%25-green.svg)](https://github.com/jncss/skv)
+[![Test Coverage](https://img.shields.io/badge/coverage-81.8%25-green.svg)](https://github.com/jncss/skv)
 [![Tests Passing](https://img.shields.io/badge/tests-142%20passing-brightgreen.svg)](https://github.com/jncss/skv)
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
@@ -19,6 +19,7 @@ A Go library for storing key/value data in a sequential binary file format.
 
 - **Sequential file format** - All writes are append-only for simplicity and reliability
 - **Binary encoding** - Efficient storage with variable-length data size fields
+- **CRC integrity checking** - Every record includes CRC-16 or CRC-32 checksum for corruption detection
 - **In-memory cache** - Automatic caching of all keys for O(1) read performance
 - **Free space reuse** - Automatically reuses space from deleted records, reducing file bloat
 - **Thread-safe** - All operations are protected with mutex locks for safe concurrent access within a single process
@@ -31,9 +32,11 @@ A Go library for storing key/value data in a sequential binary file format.
 - **Iterator support** - ForEach for processing all key-value pairs
 - **File operations** - Direct file storage/retrieval with PutFile/GetFile/UpdateFile
 - **Command-line tool** - Full-featured CLI with 23 commands for database management
+- **Data recovery** - CLI recover command to salvage valid records from corrupted databases
 - **Soft deletes** - Deleted records are marked with a flag (bit 7) preserving original type
 - **Last-write-wins** - When a key is updated, the new value is appended; Get returns the last active occurrence
 - **Compact operation** - Remove deleted records and duplicate keys to reduce file size
+- **Atomic compaction** - Safe compaction using temporary files to prevent corruption
 - **Type safety** - Automatic selection of data size field (1, 2, 4, or 8 bytes) based on value length
 
 ## File Format (.skv)
@@ -60,6 +63,17 @@ After the header, records are stored sequentially with the following binary stru
 | Key | [key_size] bytes | Key data |
 | Data Size | 1/2/4/8 bytes | Length of the data (according to Type field) |
 | Data | [data_size] bytes | Value data |
+| CRC | 2 or 4 bytes | CRC-16 for Type 0x01, CRC-32 for other types<br>Covers entire record: type + key_size + key + data_size + data |
+
+**Data Integrity**: Each record includes a CRC checksum to detect corruption:
+- **CRC-16-CCITT** (2 bytes): Used for Type 0x01 records (data ≤ 255 bytes)
+  - Polynomial: 0x1021, Initial value: 0xFFFF
+- **CRC-32-IEEE** (4 bytes): Used for Types 0x02, 0x04, 0x08 (larger data)
+  - Standard IEEE polynomial (same as PNG, Ethernet, ZIP)
+
+The CRC is calculated over the entire record (type + key_size + key + data_size + data) and stored 
+in little-endian format. On read, if the CRC doesn't match, an error is returned with details about 
+the mismatch to help identify corruption.
 
 **Note on free space reuse**: When records are deleted or updated, the library tracks free space locations. 
 New records will automatically reuse these spaces if they fit, improving storage efficiency. 

@@ -62,6 +62,8 @@ func main() {
 		handleVerify()
 	case "compact":
 		handleCompact()
+	case "recover":
+		handleRecover()
 	case "help":
 		printHelp()
 	default:
@@ -110,6 +112,7 @@ func printUsage() {
 	fmt.Println("    restore <db> <json-file>         Restore from backup")
 	fmt.Println("    verify <db>                      Check integrity & stats")
 	fmt.Println("    compact <db>                     Remove deleted records")
+	fmt.Println("    recover <corrupted> <recovered>  Recover valid records from corrupted file")
 	fmt.Println()
 	fmt.Println("  Help:")
 	fmt.Println("    help                             Show detailed help")
@@ -219,5 +222,16 @@ func printHelp() {
 	fmt.Println("COMPACT - Remove deleted records")
 	fmt.Println("  Usage: skv compact <database>")
 	fmt.Println("  Note: Reduces file size by removing wasted space")
+	fmt.Println()
+	fmt.Println("RECOVER - Recover valid records from corrupted database")
+	fmt.Println("  Usage: skv recover <corrupted-file> <recovered-file>")
+	fmt.Println("  Description: Scans a corrupted SKV file byte-by-byte looking for")
+	fmt.Println("               valid records. When a potential record is found (type")
+	fmt.Println("               byte 0x01, 0x02, 0x04, or 0x08), it attempts to parse")
+	fmt.Println("               and verify the CRC. Valid records are saved to a new")
+	fmt.Println("               database file.")
+	fmt.Println("  Note: Only active records with valid CRC are recovered.")
+	fmt.Println("        Deleted records and corrupted data are skipped.")
+	fmt.Println("  Example: skv recover broken.skv repaired.skv")
 	fmt.Println()
 }

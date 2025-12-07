@@ -264,6 +264,40 @@ Size after:  380000 bytes (0.36 MB)
 Saved:       144288 bytes (0.14 MB, 27.5%)
 ```
 
+#### recover - Recover valid records from corrupted database
+```bash
+skv recover corrupted.skv repaired.skv
+```
+
+Scans a corrupted SKV file byte-by-byte looking for valid records. When a potential record is found (type byte 0x01, 0x02, 0x04, or 0x08), it attempts to parse and verify the CRC. Valid records are saved to a new database file.
+
+**Features:**
+- Byte-by-byte scanning for maximum recovery
+- CRC verification ensures only valid records are recovered
+- Skips deleted records and corrupted data
+- Progress reporting for large files
+
+**Use cases:**
+- Database corruption detected by verify
+- Disk errors or file system corruption
+- Interrupted writes or power failures
+
+Example output:
+```
+Attempting to recover records from 'corrupted.skv'...
+Found valid SKV header, skipping...
+Scanning 15438 bytes for valid records...
+  Recovered 100 records...
+  Recovered 200 records...
+
+✓ Recovery complete
+  Total records recovered: 247
+  Invalid bytes skipped: 1834
+  Recovered database: repaired.skv
+```
+
+**See [RECOVERY.md](RECOVERY.md) for detailed recovery strategies and best practices.**
+
 ## Help
 
 Get general help:

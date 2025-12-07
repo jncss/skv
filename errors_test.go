@@ -141,11 +141,11 @@ func TestCalculateRecordSize(t *testing.T) {
 		recordType byte
 		expected   uint64
 	}{
-		{5, 10, Type1Byte, 1 + 1 + 5 + 1 + 10},                   // 18
-		{5, 10, Type2Bytes, 1 + 1 + 5 + 2 + 10},                  // 19
-		{5, 10, Type4Bytes, 1 + 1 + 5 + 4 + 10},                  // 21
-		{5, 10, Type8Bytes, 1 + 1 + 5 + 8 + 10},                  // 25
-		{10, 100, DeletedFlag | Type1Byte, 1 + 1 + 10 + 1 + 100}, // With deleted flag
+		{5, 10, Type1Byte, 1 + 1 + 5 + 1 + 10 + 2},                   // 20 (+ 2 for CRC-16)
+		{5, 10, Type2Bytes, 1 + 1 + 5 + 2 + 10 + 4},                  // 23 (+ 4 for CRC-32)
+		{5, 10, Type4Bytes, 1 + 1 + 5 + 4 + 10 + 4},                  // 25 (+ 4 for CRC-32)
+		{5, 10, Type8Bytes, 1 + 1 + 5 + 8 + 10 + 4},                  // 29 (+ 4 for CRC-32)
+		{10, 100, DeletedFlag | Type1Byte, 1 + 1 + 10 + 1 + 100 + 2}, // With deleted flag (+ 2 for CRC-16)
 	}
 
 	for _, tt := range tests {
