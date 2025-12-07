@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -13,7 +14,9 @@ func TestOpen(t *testing.T) {
 
 	// Clean up file if it exists
 	os.Remove(testFile)
+	os.Remove(testFile + ".wal")
 	defer os.Remove(testFile)
+	defer os.Remove(testFile + ".wal")
 
 	// Test 1: Create new file
 	db, err := Open(testFile)
@@ -1264,4 +1267,20 @@ func TestCacheRebuildAfterCompact(t *testing.T) {
 	if len(keys) != 2 {
 		t.Errorf("Expected 2 keys after compact, got: %d", len(keys))
 	}
+}
+
+// TestMain runs before/after all tests to cleanup WAL files
+func TestMain(m *testing.M) {
+	// Run tests
+	code := m.Run()
+
+	// Cleanup all .wal files
+	filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && filepath.Ext(path) == ".wal" {
+			os.Remove(path)
+		}
+		return nil
+	})
+
+	os.Exit(code)
 }

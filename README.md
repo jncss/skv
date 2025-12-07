@@ -3,8 +3,8 @@
 A Go library for storing key/value data in a sequential binary file format.
 
 [![Production Ready](https://img.shields.io/badge/production-ready-green.svg)](https://github.com/jncss/skv)
-[![Test Coverage](https://img.shields.io/badge/coverage-82.4%25-green.svg)](https://github.com/jncss/skv)
-[![Tests Passing](https://img.shields.io/badge/tests-196%20passing-brightgreen.svg)](https://github.com/jncss/skv)
+[![Test Coverage](https://img.shields.io/badge/coverage-79.7%25-green.svg)](https://github.com/jncss/skv)
+[![Tests Passing](https://img.shields.io/badge/tests-206%20passing-brightgreen.svg)](https://github.com/jncss/skv)
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
 **Performance Metrics:**
@@ -13,11 +13,12 @@ A Go library for storing key/value data in a sequential binary file format.
 - 🔄 **365 updates/sec** - With automatic space reuse
 - 🧵 **1,900 ops/sec** - Concurrent operations (10 goroutines, race-free)
 - 📦 **37% reduction** - Average compaction savings
-- ✅ **196 tests** - All passing (comprehensive coverage including streaming, safety, context, indexes, and cursors)
+- ✅ **206 tests** - All passing (comprehensive coverage including streaming, safety, context, indexes, cursors, and WAL)
 - 💾 **O(1) memory** - Streaming operations with constant memory usage regardless of file size
 
 ## Features
 
+- **Write-Ahead Log (WAL)** - Crash recovery with automatic operation replay for guaranteed durability
 - **Sequential file format** - All writes are append-only for simplicity and reliability
 - **Binary encoding** - Efficient storage with variable-length data size fields
 - **CRC integrity checking** - Every record includes CRC-16 or CRC-32 checksum for corruption detection

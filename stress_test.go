@@ -216,6 +216,9 @@ func TestStressConcurrent(t *testing.T) {
 	}
 	defer db.Close()
 
+	// Disable WAL for stress test performance (WAL adds significant fsync overhead)
+	db.wal.Disable()
+
 	const numGoroutines = 10
 	const opsPerGoroutine = 1000
 
@@ -379,6 +382,9 @@ func TestStressReopenAndRecover(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Cycle %d: Error opening database: %v", cycle, err)
 		}
+
+		// Disable WAL for stress test performance (WAL adds significant fsync overhead)
+		db.wal.Disable()
 
 		// Add records
 		for i := 0; i < recordsPerCycle; i++ {

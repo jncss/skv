@@ -218,6 +218,7 @@ type SKV struct {
 	cache     map[string]int64  // Cache: key -> file position
 	freeSpace []FreeSpace       // List of free spaces (deleted records)
 	indexes   map[string]*Index // Secondary indexes
+	wal       *WAL              // Write-ahead log for durability
 	mu        sync.RWMutex      // Mutex for thread-safe operations
 }
 
@@ -234,18 +235,28 @@ func Open(name string) (*SKV, error) {
 		return nil, fmt.Errorf("error opening file %s: %w", name, err)
 	}
 
+	// Open WAL file (same name with .wal extension)
+	walPath := name + ".wal"
+	wal, err := OpenWAL(walPath)
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("error opening WAL: %w", err)
+	}
+
 	skv := &SKV{
 		file:      file,
 		filePath:  name,
 		cache:     make(map[string]int64),
 		freeSpace: make([]FreeSpace, 0),
 		indexes:   make(map[string]*Index),
+		wal:       wal,
 	}
 
 	// Check if file is new or existing
 	info, err := file.Stat()
 	if err != nil {
 		file.Close()
+		wal.Close()
 		return nil, fmt.Errorf("error getting file info: %w", err)
 	}
 
@@ -253,19 +264,29 @@ func Open(name string) (*SKV, error) {
 		// New file - write header
 		if err := skv.writeHeader(); err != nil {
 			file.Close()
+			wal.Close()
 			return nil, fmt.Errorf("error writing header: %w", err)
 		}
 	} else {
 		// Existing file - verify header
 		if err := skv.verifyHeader(); err != nil {
 			file.Close()
+			wal.Close()
 			return nil, fmt.Errorf("error verifying header: %w", err)
+		}
+
+		// Recover from WAL if there are uncommitted operations
+		if err := skv.recoverFromWAL(); err != nil {
+			file.Close()
+			wal.Close()
+			return nil, fmt.Errorf("error recovering from WAL: %w", err)
 		}
 	}
 
 	// Build cache by scanning the file
 	if err := skv.rebuildCache(); err != nil {
 		file.Close()
+		wal.Close()
 		return nil, fmt.Errorf("error building cache: %w", err)
 	}
 
@@ -317,15 +338,86 @@ func (s *SKV) verifyHeader() error {
 	return nil
 }
 
+// recoverFromWAL replays operations from the WAL if there are uncommitted changes
+func (s *SKV) recoverFromWAL() error {
+	// Check if WAL has any entries
+	walSize, err := s.wal.Size()
+	if err != nil {
+		return fmt.Errorf("error getting WAL size: %w", err)
+	}
+
+	// If WAL only has header, nothing to recover
+	if walSize <= WALHeaderSize {
+		return nil
+	}
+
+	// Recover entries from WAL
+	entries, err := s.wal.Recover()
+	if err != nil {
+		return fmt.Errorf("error recovering from WAL: %w", err)
+	}
+
+	// If no entries or only commit marker, nothing to do
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// Disable WAL during recovery to avoid recursive logging
+	s.wal.Disable()
+	defer s.wal.Enable()
+
+	// Replay operations
+	for _, entry := range entries {
+		switch entry.OpType {
+		case WALOpPut:
+			// Use putInternal - ignore ErrKeyExists since the operation may have
+			// already been applied before the crash (idempotent recovery)
+			if err := s.putInternal(entry.Key, entry.Data); err != nil && err != ErrKeyExists {
+				return fmt.Errorf("error replaying put from WAL: %w", err)
+			}
+		case WALOpDelete:
+			if err := s.deleteInternal(entry.Key); err != nil && err != ErrKeyNotFound {
+				return fmt.Errorf("error replaying delete from WAL: %w", err)
+			}
+		case WALOpCommit:
+			// Commit marker - stop here
+			break
+		}
+	}
+
+	// Clear WAL after successful recovery
+	if err := s.wal.Truncate(); err != nil {
+		return fmt.Errorf("error truncating WAL after recovery: %w", err)
+	}
+
+	return nil
+}
+
 // Close closes the database file
 func (s *SKV) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.file != nil {
-		return s.file.Close()
+	var closeErr error
+
+	// Close WAL first
+	if s.wal != nil {
+		if err := s.wal.Close(); err != nil {
+			closeErr = fmt.Errorf("error closing WAL: %w", err)
+		}
 	}
-	return nil
+
+	// Close main file
+	if s.file != nil {
+		if err := s.file.Close(); err != nil {
+			if closeErr != nil {
+				return fmt.Errorf("%w; also error closing file: %v", closeErr, err)
+			}
+			return err
+		}
+	}
+
+	return closeErr
 }
 
 // CloseWithCompact compacts the database before closing to remove deleted records
@@ -341,12 +433,33 @@ func (s *SKV) CloseWithCompact() error {
 	// Compact the database to remove deleted records
 	// Note: compactInternal is called without lock since we already have it
 	if err := s.compactInternal(); err != nil {
-		// Even if compact fails, try to close the file
-		s.file.Close()
+		// Even if compact fails, try to close files
+		if s.wal != nil {
+			s.wal.Close()
+		}
+		if s.file != nil {
+			s.file.Close()
+		}
 		return fmt.Errorf("error compacting before close: %w", err)
 	}
 
-	return s.file.Close()
+	// Close WAL
+	var closeErr error
+	if s.wal != nil {
+		if err := s.wal.Close(); err != nil {
+			closeErr = fmt.Errorf("error closing WAL: %w", err)
+		}
+	}
+
+	// Close main file
+	if err := s.file.Close(); err != nil {
+		if closeErr != nil {
+			return fmt.Errorf("%w; also error closing file: %v", closeErr, err)
+		}
+		return err
+	}
+
+	return closeErr
 }
 
 // writeRecordAtPosition writes a complete record (type, key, data) at the current file position
@@ -766,6 +879,11 @@ func (s *SKV) PutCtx(ctx context.Context, key []byte, data []byte) error {
 		return ErrKeyExists
 	}
 
+	// Log to WAL first
+	if err := s.wal.LogPut(key, data); err != nil {
+		return fmt.Errorf("error logging to WAL: %w", err)
+	}
+
 	// Write the record
 	recordPos, err := s.writeRecord(key, data)
 	if err != nil {
@@ -777,6 +895,16 @@ func (s *SKV) PutCtx(ctx context.Context, key []byte, data []byte) error {
 
 	// Update indexes
 	s.updateIndexes(key, data)
+
+	// Commit to WAL (operation successful)
+	if err := s.wal.LogCommit(); err != nil {
+		return fmt.Errorf("error committing to WAL: %w", err)
+	}
+
+	// Truncate WAL after successful commit
+	if err := s.wal.Truncate(); err != nil {
+		return fmt.Errorf("error truncating WAL: %w", err)
+	}
 
 	return nil
 }
@@ -847,6 +975,11 @@ func (s *SKV) UpdateCtx(ctx context.Context, key []byte, data []byte) error {
 		return ErrKeyNotFound
 	}
 
+	// Log to WAL first
+	if err := s.wal.LogPut(key, data); err != nil {
+		return fmt.Errorf("error logging to WAL: %w", err)
+	}
+
 	// Key exists, delete it first (internal version without lock)
 	if err := s.deleteInternal(key); err != nil {
 		return err
@@ -863,6 +996,16 @@ func (s *SKV) UpdateCtx(ctx context.Context, key []byte, data []byte) error {
 
 	// Update indexes
 	s.updateIndexes(key, data)
+
+	// Commit to WAL (operation successful)
+	if err := s.wal.LogCommit(); err != nil {
+		return fmt.Errorf("error committing to WAL: %w", err)
+	}
+
+	// Truncate WAL after successful commit
+	if err := s.wal.Truncate(); err != nil {
+		return fmt.Errorf("error truncating WAL: %w", err)
+	}
 
 	return nil
 }
@@ -1017,7 +1160,27 @@ func (s *SKV) DeleteCtx(ctx context.Context, key []byte) error {
 		return err
 	}
 
-	return s.deleteInternal(key)
+	// Log to WAL first
+	if err := s.wal.LogDelete(key); err != nil {
+		return fmt.Errorf("error logging to WAL: %w", err)
+	}
+
+	// Perform the delete
+	if err := s.deleteInternal(key); err != nil {
+		return err
+	}
+
+	// Commit to WAL (operation successful)
+	if err := s.wal.LogCommit(); err != nil {
+		return fmt.Errorf("error committing to WAL: %w", err)
+	}
+
+	// Truncate WAL after successful commit
+	if err := s.wal.Truncate(); err != nil {
+		return fmt.Errorf("error truncating WAL: %w", err)
+	}
+
+	return nil
 }
 
 // Delete deletes a key by setting the deleted bit in its record

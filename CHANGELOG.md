@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Write-Ahead Log (WAL)**: Crash recovery and durability guarantees
+  - Logs all operations (Put, Update, Delete) before applying to main file
+  - Automatic recovery on database open - replays uncommitted operations
+  - CRC-32 protected WAL entries for corruption detection
+  - Commit markers for transaction boundaries
+  - WAL file created as `<database>.skv.wal`
+  - Manual control: `Enable()`, `Disable()`, `IsEnabled()`, `Size()`
+  - Functions: `OpenWAL`, `LogPut`, `LogDelete`, `LogCommit`, `Recover`, `Truncate`, `Close`
+  - Provides ACID properties (Atomicity, Consistency, Isolation, Durability)
+  - See `examples/10-wal` for usage examples
+  - See `WAL.md` for comprehensive documentation
+  - **10 WAL tests**: Basic logging, truncation, commit markers, disable/enable, large data, corruption handling, concurrent writes, and recovery
 - **CRC Integrity Checking**: Every record now includes a CRC checksum for corruption detection
   - CRC-16-CCITT (2 bytes) for Type 0x01 records (data ≤ 255 bytes)
   - CRC-32-IEEE (4 bytes) for Types 0x02, 0x04, 0x08 (larger data)

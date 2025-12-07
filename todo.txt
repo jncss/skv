@@ -7,12 +7,10 @@
 
 - **Iteradors eficients**: `ForEach` carrega tot en memòria. Un iterador que vagi llegint sota demanda seria més eficient.
 - **Compactació automàtica**: Trigger automàtic quan `WastedPercent > X%`.
-- **Índexs secundaris**: Suport per a múltiples índexs/claus alternatives.
 - **Compressió**: Opció per comprimir dades grans (LZ4, Snappy).
 
 ## 4. **Robustesa**
 
-- **Write-Ahead Log (WAL)**: Per garantir durabilitat en cas de crash.
 - **Checksums del fitxer complet**: Un checksum global per detectar corrupció.
 - **Locks a nivell de registre**: Ara és lock global, podria ser més granular per concurrència.
 
