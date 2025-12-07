@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== SKV Atomic Transactions Demo ===\n")
+	fmt.Println("=== SKV Atomic Transactions Demo ===")
 
 	// Clean up any existing demo file
 	os.Remove("demo_transactions.skv")
@@ -105,7 +105,7 @@ func main() {
 
 	// Verify keys don't exist
 	if !db.HasString("temp:key1") && !db.HasString("temp:key2") && !db.HasString("temp:key3") {
-		fmt.Println("   ✓ No keys were created (rollback successful)\n")
+		fmt.Println("   ✓ No keys were created (rollback successful)")
 	}
 
 	// Demo 4: Validation Error
@@ -126,7 +126,7 @@ func main() {
 
 		// Verify dave wasn't created
 		if !db.HasString("user:dave") {
-			fmt.Println("   ✓ user:dave was not created (transaction atomicity preserved)\n")
+			fmt.Println("   ✓ user:dave was not created (transaction atomicity preserved)")
 		}
 	}
 
@@ -159,7 +159,7 @@ func main() {
 	fmt.Printf("   - status:new: %s\n", newVal)
 	fmt.Printf("   - status:active: %s\n", activeVal)
 	if !db.HasString("status:pending") {
-		fmt.Println("   - status:pending: (deleted)\n")
+		fmt.Println("   - status:pending: (deleted)")
 	}
 
 	// Demo 6: Large Transaction
@@ -188,7 +188,7 @@ func main() {
 	// Demo 7: Transaction Recovery Simulation
 	fmt.Println("7. Transaction Recovery (Simulated)")
 	fmt.Println("   This demonstrates that committed transactions survive crashes")
-	fmt.Println("   while incomplete transactions are discarded.\n")
+	fmt.Println("   while incomplete transactions are discarded.")
 
 	fmt.Println("   Scenario 1: Committed transaction")
 	db.Close()
@@ -210,7 +210,7 @@ func main() {
 
 	fmt.Println("\n   Scenario 2: Incomplete transaction (simulated)")
 	fmt.Println("   In a real crash, uncommitted transactions are discarded")
-	fmt.Println("   The WAL ensures only committed transactions are applied\n")
+	fmt.Println("   The WAL ensures only committed transactions are applied")
 
 	// Demo 8: Performance Stats
 	fmt.Println("8. Transaction Performance")
