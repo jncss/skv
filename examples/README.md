@@ -213,7 +213,7 @@ find examples -type d -name "data" -exec rm -rf {} +
 
 From project benchmarks:
 - **Writes**: ~750 inserts/sec
-- **Reads**: ~270,000 reads/sec (cached)
+- **Reads**: ~732,000 reads/sec (cached)
 - **Updates**: ~365 updates/sec
 - **Concurrent**: ~1,900 ops/sec (10 goroutines)
 - **Compaction**: ~37% average size reduction

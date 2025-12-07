@@ -340,6 +340,10 @@ func (w *WAL) readEntry() (*WALEntry, error) {
 
 // Truncate removes all entries from the WAL (called after successful commit)
 func (w *WAL) Truncate() error {
+	if !w.enabled {
+		return nil
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 

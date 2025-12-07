@@ -204,7 +204,9 @@ This provides **best-effort recovery** up to the last valid operation.
 ### Overhead
 
 - **Write amplification**: Each operation writes to both WAL and main file (~2x writes)
-- **Sync operations**: Each operation performs multiple `fsync()` calls (WAL write, WAL commit, WAL truncate, plus main file)
+- **Sync operations**: Each operation performs 3 `fsync()` calls (WAL write, WAL commit, WAL truncate)
+- **Performance impact**: ~73% slower writes compared to no WAL (199 vs 734 ops/sec for inserts)
+- **Read impact**: Zero - reads are from cache and unaffected (732,000 ops/sec)
 - **Space**: WAL file size varies (typically small, truncated after each operation)
 
 ### Optimization Strategies
@@ -251,11 +253,12 @@ db.Update([]byte("key"), []byte("new value"))
 
 ### Typical Performance
 
-On modern SSDs:
-- **With WAL**: ~500-750 ops/sec (sequential writes)
-- **Without WAL**: ~1000-1500 ops/sec (no fsync)
+Benchmark results with 100-byte values on modern SSD:
+- **With WAL**: ~200 ops/sec for writes (Put/Delete)
+- **Without WAL**: ~700-750 ops/sec for writes (3.7x faster)
+- **Reads**: ~732,000 ops/sec (unaffected by WAL)
 
-WAL overhead is **minimal** for most applications and provides crucial durability guarantees.
+WAL overhead is **~73%** on writes due to 3 fsync operations per write (WAL write, WAL commit, WAL truncate). However, it provides crucial durability guarantees. For bulk imports where you can re-run the operation if it fails, temporarily disable WAL to achieve 3-7x faster writes.
 
 ## Advanced Topics
 

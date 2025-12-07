@@ -8,9 +8,14 @@ A Go library for storing key/value data in a sequential binary file format.
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
 **Performance Metrics:**
-- ⚡ **750 inserts/sec** - Sequential writes (10,000 records tested)
-- 🚀 **270,000 reads/sec** - In-memory cached lookups
-- 🔄 **365 updates/sec** - With automatic space reuse
+- ⚡ **199 writes/sec** - With WAL enabled (crash-safe, default)
+- 🔒 **734 writes/sec** - Without WAL (3.7x faster, no durability guarantee)
+- 🚀 **732,000 reads/sec** - In-memory cached lookups (4.9 μs/op)
+- 🔄 **154 updates/sec** - With WAL and automatic space reuse
+- 🔄 **374 updates/sec** - Without WAL (2.4x faster)
+- 🗑️ **109 deletes/sec** - With WAL enabled
+- 🗑️ **746 deletes/sec** - Without WAL (6.8x faster)
+- 📊 **WAL overhead** - ~73% slower writes, 0% impact on reads
 - 🧵 **1,900 ops/sec** - Concurrent operations (10 goroutines, race-free)
 - 📦 **37% reduction** - Average compaction savings
 - ✅ **206 tests** - All passing (comprehensive coverage including streaming, safety, context, indexes, cursors, and WAL)
@@ -53,9 +58,9 @@ Every SKV file starts with a 6-byte header:
 | Field | Size | Description |
 |-------|------|-------------|
 | Magic | 3 bytes | Always "SKV" (0x53 0x4B 0x56) to identify the file format |
-| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.1.0) |
+| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.2.0) |
 
-**Current version:** 0.1.0
+**Current version:** 0.2.0
 
 ### Record Format
 
@@ -930,9 +935,9 @@ The library includes comprehensive tests covering:
 
 **Stress tests:**
 - **TestStress10000Records**: Intensive test with 10,000 records
-  - Insert: ~750 records/sec
-  - Read: ~270,000 reads/sec (cached)
-  - Update: ~365 updates/sec
+  - Insert: ~750 records/sec (with WAL disabled for stress test performance)
+  - Read: ~732,000 reads/sec (cached)
+  - Update: ~365 updates/sec (with WAL disabled)
   - Mixed operations: ~1,000 ops/sec
   - Compaction: ~37% file size reduction
   
@@ -967,31 +972,38 @@ The library includes comprehensive tests covering:
 
 ## Performance Considerations
 
-- **Sequential writes** are very fast (append-only, ~750 inserts/sec tested with 10K records)
-- **Reads** are extremely fast thanks to in-memory cache (~270,000 reads/sec)
-- **Updates** are efficient (~365 updates/sec) with automatic space reuse
+- **Writes with WAL** are crash-safe (~199 inserts/sec, ~154 updates/sec, ~109 deletes/sec)
+- **Writes without WAL** are 2.4-6.8x faster (~734 inserts/sec, ~374 updates/sec, ~746 deletes/sec) but lose durability guarantee
+- **Reads** are extremely fast thanks to in-memory cache (~732,000 reads/sec, 4.9 μs/op)
+- **WAL overhead** is ~73% on writes, 0% on reads (3 fsyncs per operation dominate write time)
 - **Deletes** are O(1) for key lookups (cache) + O(1) for marking deleted
 - **Keys listing** is O(1) using the cache
 - **Concurrent operations**: ~1,700-1,900 ops/sec with 10 goroutines
 - **Memory usage:** Only key strings and file positions are cached (approximately 8 bytes overhead per key)
 
-### Benchmark Results (from stress tests)
+### Benchmark Results (Go benchmarks, 100-byte values)
 
 ```
-Operation Type           Throughput      Notes
-─────────────────────────────────────────────────────────────
-Sequential Insert        750 ops/sec     10,000 records
-Cached Reads            270,000 ops/sec  From memory cache
-Updates                  365 ops/sec     With space reuse
-Mixed Operations       1,000 ops/sec     50% read, 25% update, 25% other
-Concurrent (10 threads) 1,900 ops/sec    Race detector clean
-Compaction              10 seconds       10K records, 37% reduction
+Operation                Throughput      Time/op      Speedup   Notes
+─────────────────────────────────────────────────────────────────────────────
+Put (with WAL)              199 ops/sec     5.0 ms              Crash-safe, default
+Put (without WAL)           734 ops/sec     1.4 ms    3.7x      No durability guarantee
+Get (cached)            732,000 ops/sec     4.9 μs              From memory cache
+Update (with WAL)           154 ops/sec     6.5 ms              Crash-safe
+Update (without WAL)        374 ops/sec     2.7 ms    2.4x      No durability guarantee
+Delete (with WAL)           109 ops/sec     9.2 ms              Crash-safe
+Delete (without WAL)        746 ops/sec     1.3 ms    6.8x      No durability guarantee
+Concurrent (10 threads)   1,900 ops/sec                         Race detector clean
+Compaction                 10 seconds                            10K records, 37% reduction
 ```
+
+**WAL Impact:** Write-Ahead Log provides crash recovery and durability at the cost of ~73% write throughput due to fsync overhead (3 fsyncs per operation). Reads are completely unaffected. For bulk imports, temporarily disable WAL with `db.wal.Disable()` to achieve 3-7x faster writes.
 
 This library is best suited for:
+- Applications requiring data durability and crash recovery (WAL enabled by default)
 - Small to large datasets where all keys can fit in memory (tested with 10,000+ keys)
-- Read-heavy workloads (thanks to O(1) cache lookups with 270K+ reads/sec)
-- Write-heavy workloads (append-only is very fast, tested at 750 inserts/sec)
+- Read-heavy workloads (thanks to O(1) cache lookups with 728K+ reads/sec)
+- Write-moderate workloads where durability is valued over raw speed
 - Concurrent applications (thread-safe, tested with 10 concurrent goroutines)
 - Scenarios where simplicity and reliability are important
 - Applications that can periodically compact the database during low-traffic periods

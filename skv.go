@@ -21,7 +21,7 @@ const (
 	HeaderMagic  = "SKV" // Magic bytes to identify SKV files
 	HeaderSize   = 6     // Total header size: 3 bytes magic + 3 bytes version
 	VersionMajor = 0     // Major version number
-	VersionMinor = 1     // Minor version number
+	VersionMinor = 2     // Minor version number
 	VersionPatch = 0     // Patch version number
 )
 

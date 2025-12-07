@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-12-07
+
 ### Added
 - **Write-Ahead Log (WAL)**: Crash recovery and durability guarantees
   - Logs all operations (Put, Update, Delete) before applying to main file
@@ -17,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Manual control: `Enable()`, `Disable()`, `IsEnabled()`, `Size()`
   - Functions: `OpenWAL`, `LogPut`, `LogDelete`, `LogCommit`, `Recover`, `Truncate`, `Close`
   - Provides ACID properties (Atomicity, Consistency, Isolation, Durability)
+  - Performance: ~199 writes/sec with WAL, ~734 writes/sec without WAL
   - See `examples/10-wal` for usage examples
   - See `WAL.md` for comprehensive documentation
   - **10 WAL tests**: Basic logging, truncation, commit markers, disable/enable, large data, corruption handling, concurrent writes, and recovery
