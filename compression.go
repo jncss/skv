@@ -2,7 +2,6 @@ package skv
 
 import (
 	"fmt"
-	"io"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
@@ -115,38 +114,4 @@ func decompress(data []byte, compressionType CompressionType, originalSize int) 
 	default:
 		return nil, fmt.Errorf("unsupported compression type: %s", compressionType)
 	}
-}
-
-// compressWriter wraps an io.Writer and compresses data before writing
-type compressWriter struct {
-	w               io.Writer
-	compressionType CompressionType
-}
-
-// newCompressWriter creates a new compressing writer
-func newCompressWriter(w io.Writer, compressionType CompressionType) *compressWriter {
-	return &compressWriter{
-		w:               w,
-		compressionType: compressionType,
-	}
-}
-
-// Write compresses and writes data
-func (cw *compressWriter) Write(p []byte) (n int, err error) {
-	compressed, actualType, err := compress(p, cw.compressionType)
-	if err != nil {
-		return 0, err
-	}
-
-	// Write compression type as first byte
-	if _, err := cw.w.Write([]byte{byte(actualType)}); err != nil {
-		return 0, err
-	}
-
-	// Write compressed (or original) data
-	if _, err := cw.w.Write(compressed); err != nil {
-		return 0, err
-	}
-
-	return len(p), nil // Return original size
 }
