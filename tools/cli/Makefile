@@ -44,7 +44,7 @@ install:
 # Clean build artifacts
 clean:
 	@echo "Cleaning..."
-	rm -f skv skv-*.exe skv-linux-* skv-darwin-*
+	rm -f skv cli skv-*.exe skv-linux-* skv-darwin-*
 	@echo "✓ Clean complete"
 
 # Run tests

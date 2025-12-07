@@ -11,22 +11,51 @@ import (
 
 // Global flags
 var hexDump bool
+var compressionType string = "none"
 
 // parseFlags parses global flags from args
 func parseFlags() []string {
-	remaining := []string{}
-	for i, arg := range os.Args {
-		if i == 0 {
-			remaining = append(remaining, arg)
-			continue
-		}
+	remaining := []string{os.Args[0]}
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
 		if arg == "--hex" || arg == "-x" {
 			hexDump = true
+		} else if arg == "--compression" || arg == "-c" {
+			if i+1 < len(os.Args) {
+				i++ // Move to next arg
+				compressionType = os.Args[i]
+			} else {
+				fmt.Fprintln(os.Stderr, "Error: --compression requires an argument (none, snappy, lz4)")
+				os.Exit(1)
+			}
 		} else {
 			remaining = append(remaining, arg)
 		}
 	}
 	return remaining
+}
+
+// getCompressionOption returns the compression option based on the flag
+func getCompressionOption() skv.CompressionType {
+	switch compressionType {
+	case "none":
+		return skv.CompressionNone
+	case "snappy":
+		return skv.CompressionSnappy
+	case "lz4":
+		return skv.CompressionLZ4
+	default:
+		fmt.Fprintf(os.Stderr, "Invalid compression type: %s (use none, snappy, or lz4)\n", compressionType)
+		os.Exit(1)
+		return skv.CompressionNone
+	}
+}
+
+// openDatabase opens a database with the configured compression
+func openDatabase(path string) (*skv.SKV, error) {
+	return skv.OpenWithOptions(path, &skv.Options{
+		Compression: getCompressionOption(),
+	})
 }
 
 // formatHex formats a string as hexdump
@@ -93,7 +122,7 @@ func handlePut() {
 	key := os.Args[3]
 	value := os.Args[4]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -123,7 +152,7 @@ func handleGet() {
 	dbPath := os.Args[2]
 	key := os.Args[3]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -158,7 +187,7 @@ func handleUpdate() {
 	key := os.Args[3]
 	value := os.Args[4]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -188,7 +217,7 @@ func handleDelete() {
 	dbPath := os.Args[2]
 	key := os.Args[3]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -218,7 +247,7 @@ func handleExists() {
 	dbPath := os.Args[2]
 	key := os.Args[3]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -238,7 +267,7 @@ func handleCount() {
 
 	dbPath := os.Args[2]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -258,7 +287,7 @@ func handleKeys() {
 
 	dbPath := os.Args[2]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -289,7 +318,7 @@ func handleClear() {
 
 	dbPath := os.Args[2]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -314,7 +343,7 @@ func handleForEach() {
 
 	dbPath := os.Args[2]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -351,7 +380,7 @@ func handlePutFile() {
 	key := os.Args[3]
 	filePath := os.Args[4]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -384,7 +413,7 @@ func handleGetFile() {
 	key := os.Args[3]
 	filePath := os.Args[4]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -416,7 +445,7 @@ func handleUpdateFile() {
 	key := os.Args[3]
 	filePath := os.Args[4]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -448,7 +477,7 @@ func handlePutStream() {
 	key := os.Args[3]
 	filePath := os.Args[4]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -493,7 +522,7 @@ func handleGetStream() {
 	key := os.Args[3]
 	filePath := os.Args[4]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -532,7 +561,7 @@ func handleUpdateStream() {
 	key := os.Args[3]
 	filePath := os.Args[4]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -575,7 +604,7 @@ func handlePutBatch() {
 
 	dbPath := os.Args[2]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -609,7 +638,7 @@ func handleGetBatch() {
 	dbPath := os.Args[2]
 	keys := os.Args[3:]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -645,7 +674,7 @@ func handleBackup() {
 	dbPath := os.Args[2]
 	backupPath := os.Args[3]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -673,7 +702,7 @@ func handleRestore() {
 	dbPath := os.Args[2]
 	backupPath := os.Args[3]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -699,7 +728,7 @@ func handleVerify() {
 
 	dbPath := os.Args[2]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -747,7 +776,7 @@ func handleCompact() {
 
 	dbPath := os.Args[2]
 
-	db, err := skv.Open(dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)
@@ -828,7 +857,7 @@ func handleRecover() {
 	inFile.Close()
 
 	// Create new database for recovered records
-	recoveredDB, err := skv.Open(recoveredFile)
+	recoveredDB, err := openDatabase(recoveredFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating recovered database: %v\n", err)
 		os.Exit(1)
@@ -932,7 +961,39 @@ func tryParseRecord(fileData []byte, pos int64, fileSize int64) (*recordInfo, in
 	copy(key, fileData[pos:pos+int64(keySize)])
 	pos += int64(keySize)
 
-	// Read data size based on type
+	// Check if compressed (bits 5-6 in type byte)
+	compressionBits := typeByte & 0x60
+	isCompressed := compressionBits != 0
+
+	// If compressed, skip original size field (we don't decompress during recovery)
+	if isCompressed {
+		switch baseType {
+		case 0x01:
+			if pos >= int64(len(fileData)) {
+				return nil, 0, fmt.Errorf("incomplete original size")
+			}
+			pos++
+		case 0x02:
+			if pos+2 > int64(len(fileData)) {
+				return nil, 0, fmt.Errorf("incomplete original size")
+			}
+			pos += 2
+		case 0x04:
+			if pos+4 > int64(len(fileData)) {
+				return nil, 0, fmt.Errorf("incomplete original size")
+			}
+			pos += 4
+		case 0x08:
+			if pos+8 > int64(len(fileData)) {
+				return nil, 0, fmt.Errorf("incomplete original size")
+			}
+			pos += 8
+		default:
+			return nil, 0, fmt.Errorf("invalid type byte")
+		}
+	}
+
+	// Read data size based on type (this is compressed size if compressed)
 	var dataSize uint64
 	switch baseType {
 	case 0x01:

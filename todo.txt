@@ -5,9 +5,8 @@
 
 ## 3. **Funcionalitats noves**
 
-- **Iteradors eficients**: `ForEach` carrega tot en memòria. Un iterador que vagi llegint sota demanda seria més eficient.
+- **Cursor lazy loading**: Els cursors carreguen totes les claus en memòria per ordenar-les amb `sort.Strings()`. Per a bases de dades amb milions de claus, això pot consumir molta RAM. Una optimització futura podria usar un índex B-tree extern per evitar carregar tot el keyspace. **Nota**: `ForEach` ja itera eficientment sense carregar valors en memòria.
 - **Compactació automàtica**: Trigger automàtic quan `WastedPercent > X%`.
-- **Compressió**: Opció per comprimir dades grans (LZ4, Snappy).
 
 ## 4. **Robustesa**
 

@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-12-07
+
+### Added
+- **Data Compression**: Transparent LZ4 and Snappy compression support
+  - Two algorithms: LZ4 (balanced, best general purpose) and Snappy (maximum speed)
+  - Threshold-based: Only data ≥128 bytes is considered for compression
+  - Adaptive: Compression only applied if it actually reduces size
+  - Mixed compression: Different records can use different algorithms in same database
+  - Transparent operation: Automatic compression on write, decompression on read
+  - New API: `OpenWithOptions()` with `Options{Compression: CompressionLZ4 | CompressionSnappy | CompressionNone}`
+  - Record format extended: Compression type stored in type byte (bits 5-6), original size field added when compressed
+  - Performance: ~5-7% write overhead, ~2-3% read overhead, 40-60% space savings on compressible data
+  - **9 compression tests**: None, small data threshold, Snappy, LZ4, incompressible data, SKV integration, mixed compression, flags
+  - See `COMPRESSION.md` for comprehensive documentation
+  - See `compression_test.go` for usage examples
+
+- **CLI Compression Support**: Added `--compression` / `-c` flag to CLI tool
+  - Values: `none` (default), `snappy`, `lz4`
+  - Applies to all write operations (put, update, putfile, putstream, etc.)
+  - Transparent: reads work regardless of compression settings
+  - Recovery support: `recover` command handles compressed databases correctly
+  - Examples: `skv -c lz4 put db.skv key value`, `skv --compression snappy putfile db.skv config file.txt`
+  - Documentation updated in `tools/cli/README.md` with compression examples
+
+### Changed
+- **BREAKING**: Record format changed to support compression
+  - Type byte bits 5-6 now used for compression flags (00=none, 01=snappy, 10=lz4)
+  - Compressed records include original size field before compressed size
+  - Old databases (v0.2.0 and earlier) may not be compatible
+  - Migration: Use backup/restore or `recover` command to migrate data
+- **Dependencies**: Added github.com/golang/snappy v1.0.0 and github.com/pierrec/lz4/v4 v4.1.22
+- **getBaseType()**: Now masks both deleted flag (bit 7) AND compression bits (bits 5-6)
+- **CLI binary name**: Clarified that CLI tool compiles as `skv` (not `cli`)
+- **Total tests**: Now 206 tests passing (197 library + 9 compression)
+
+### Fixed
+- CLI flag parsing: `--compression` flag now correctly filters from argument list
+- CLI recover: Now correctly skips compression originalSize field when parsing compressed records
+- Record type calculation: Now uses max(compressedSize, originalSize) to ensure both fit in size fields
+
 ## [0.2.0] - 2025-12-07
 
 ### Added

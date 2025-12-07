@@ -39,6 +39,13 @@ skv [options] <command> [arguments]
   - Useful for binary data or debugging encoding issues
   - Works with: `get`, `keys`, `foreach`, `getbatch`
 
+- `--compression` or `-c <type>`: Set compression algorithm for the database
+  - Values: `none` (default), `snappy`, `lz4`
+  - Applies to all write operations (put, update, putfile, etc.)
+  - Data below 128 bytes is never compressed
+  - Compression is transparent: reads work regardless of write compression settings
+  - Example: `skv -c lz4 put mydb.skv key value`
+
 ## Commands
 
 ### Basic Operations
@@ -382,10 +389,37 @@ skv restore production.skv backup_20241206.json
 skv verify production.skv
 ```
 
+### Example 6: Compression
+```bash
+# Store large data with LZ4 compression (fastest)
+skv -c lz4 put logs.skv log:2024-12-07 "$(cat large_log.txt)"
+
+# Store with Snappy compression (balanced)
+skv -c snappy put archive.skv data:20241207 "$(cat data.json)"
+
+# Compression is transparent - no flag needed for reading
+skv get logs.skv log:2024-12-07
+
+# Recover compressed database
+skv recover corrupted_compressed.skv repaired.skv
+
+# Verify shows actual stored size (compressed)
+skv verify logs.skv
+```
+
+**Compression notes:**
+- Data < 128 bytes is never compressed (not worth it)
+- Compression is automatic based on size threshold
+- Read operations don't need compression flag
+- Both algorithms work with `recover` command
+- LZ4: Faster compression/decompression, good ratio
+- Snappy: Very fast, slightly lower ratio
+
 ## Use Cases
 
 ### 1. **Configuration Storage**
 Store application configs, environment variables, feature flags.
+
 
 ### 2. **Cache System**
 Quick key-value cache with persistence.

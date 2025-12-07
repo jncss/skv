@@ -21,7 +21,7 @@ const (
 	HeaderMagic  = "SKV" // Magic bytes to identify SKV files
 	HeaderSize   = 6     // Total header size: 3 bytes magic + 3 bytes version
 	VersionMajor = 0     // Major version number
-	VersionMinor = 2     // Minor version number
+	VersionMinor = 3     // Minor version number
 	VersionPatch = 0     // Patch version number
 )
 
@@ -35,6 +35,13 @@ const (
 	// Deleted flag (bit 7)
 	DeletedFlag byte = 0x80 // When this bit is set, the record is deleted
 
+	// Compression flags (bits 5-6)
+	// Bit pattern: 0x00 = none, 0x20 = snappy, 0x40 = lz4
+	CompressedFlag   byte = 0x60 // Mask for compression bits (bits 5-6)
+	CompressedNone   byte = 0x00 // No compression
+	CompressedSnappy byte = 0x20 // Snappy compression (bit 5)
+	CompressedLZ4    byte = 0x40 // LZ4 compression (bit 6)
+
 	// Padding byte for filling small gaps
 	PaddingByte byte = 0x80 // Used to fill gaps too small for a deleted record
 
@@ -47,9 +54,37 @@ func isDeleted(recordType byte) bool {
 	return (recordType & DeletedFlag) != 0
 }
 
-// getBaseType returns the base type without the deleted bit
+// getBaseType returns the base type without the deleted bit and compression bits
 func getBaseType(recordType byte) byte {
-	return recordType & ^DeletedFlag
+	return recordType & ^(DeletedFlag | CompressedFlag)
+}
+
+// getCompressionType extracts the compression type from the record type byte
+func getCompressionType(recordType byte) CompressionType {
+	compressionBits := recordType & CompressedFlag
+	switch compressionBits {
+	case CompressedSnappy:
+		return CompressionSnappy
+	case CompressedLZ4:
+		return CompressionLZ4
+	default:
+		return CompressionNone
+	}
+}
+
+// setCompressionType sets the compression bits in the record type byte
+func setCompressionType(recordType byte, compressionType CompressionType) byte {
+	// Clear compression bits first
+	recordType = recordType & ^CompressedFlag
+	// Set new compression bits
+	switch compressionType {
+	case CompressionSnappy:
+		return recordType | CompressedSnappy
+	case CompressionLZ4:
+		return recordType | CompressedLZ4
+	default:
+		return recordType
+	}
 }
 
 // getRecordType determines the record type based on data size
@@ -70,6 +105,7 @@ func getRecordType(dataSize uint64) byte {
 // Returns: total size including type, key_size, key, data_size, and data
 func calculateRecordSize(keySize byte, dataSize uint64, recordType byte) uint64 {
 	baseType := getBaseType(recordType)
+	compressionType := getCompressionType(recordType)
 	var dataSizeFieldSize uint64
 	var crcSize uint64
 
@@ -91,8 +127,14 @@ func calculateRecordSize(keySize byte, dataSize uint64, recordType byte) uint64 
 		crcSize = 2 // CRC-16
 	}
 
-	// type (1) + key_size (1) + key + data_size_field + data + crc
-	return 1 + 1 + uint64(keySize) + dataSizeFieldSize + dataSize + crcSize
+	// type (1) + key_size (1) + key + [original_size if compressed] + data_size_field + data + crc
+	totalSize := 1 + 1 + uint64(keySize)
+	if compressionType != CompressionNone {
+		totalSize += dataSizeFieldSize // Add original_size field
+	}
+	totalSize += dataSizeFieldSize + dataSize + crcSize
+
+	return totalSize
 }
 
 // crc16Hash implements hash.Hash for CRC-16-CCITT
@@ -213,17 +255,41 @@ type FreeSpace struct {
 
 // SKV represents a key/value database
 type SKV struct {
-	file      *os.File
-	filePath  string
-	cache     map[string]int64  // Cache: key -> file position
-	freeSpace []FreeSpace       // List of free spaces (deleted records)
-	indexes   map[string]*Index // Secondary indexes
-	wal       *WAL              // Write-ahead log for durability
-	mu        sync.RWMutex      // Mutex for thread-safe operations
+	file            *os.File
+	filePath        string
+	cache           map[string]int64  // Cache: key -> file position
+	freeSpace       []FreeSpace       // List of free spaces (deleted records)
+	indexes         map[string]*Index // Secondary indexes
+	wal             *WAL              // Write-ahead log for durability
+	compressionType CompressionType   // Compression algorithm to use for new records
+	mu              sync.RWMutex      // Mutex for thread-safe operations
+}
+
+// Options configures the behavior of an SKV database
+type Options struct {
+	// Compression specifies the compression algorithm to use for new records
+	// Default: CompressionNone (no compression)
+	// Available: CompressionSnappy, CompressionLZ4
+	Compression CompressionType
+}
+
+// DefaultOptions returns the default options for opening an SKV database
+func DefaultOptions() *Options {
+	return &Options{
+		Compression: CompressionNone,
+	}
 }
 
 // Open opens or creates a .skv file and returns an SKV object
 func Open(name string) (*SKV, error) {
+	return OpenWithOptions(name, DefaultOptions())
+}
+
+// OpenWithOptions opens or creates a .skv file with custom options
+func OpenWithOptions(name string, opts *Options) (*SKV, error) {
+	if opts == nil {
+		opts = DefaultOptions()
+	}
 	// Add .skv extension if it doesn't have it
 	if len(name) < 4 || name[len(name)-4:] != ".skv" {
 		name += ".skv"
@@ -244,12 +310,13 @@ func Open(name string) (*SKV, error) {
 	}
 
 	skv := &SKV{
-		file:      file,
-		filePath:  name,
-		cache:     make(map[string]int64),
-		freeSpace: make([]FreeSpace, 0),
-		indexes:   make(map[string]*Index),
-		wal:       wal,
+		file:            file,
+		filePath:        name,
+		cache:           make(map[string]int64),
+		freeSpace:       make([]FreeSpace, 0),
+		indexes:         make(map[string]*Index),
+		wal:             wal,
+		compressionType: opts.Compression,
 	}
 
 	// Check if file is new or existing
@@ -466,20 +533,41 @@ func (s *SKV) CloseWithCompact() error {
 // Returns the position where the record was written
 // Uses streaming CRC calculation to avoid loading large records into memory
 func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
-	// Determine the type based on the data size
-	var recordType byte
-	dataSize := uint64(len(data))
+	// Try to compress data if compression is enabled
+	originalSize := uint64(len(data))
+	compressedData, actualCompressionType, err := compress(data, s.compressionType)
+	if err != nil {
+		return 0, fmt.Errorf("compression error: %w", err)
+	}
 
+	// Use compressed data if compression was applied
+	dataToWrite := data
+	if actualCompressionType != CompressionNone {
+		dataToWrite = compressedData
+	}
+
+	// Determine the type based on BOTH compressed data size AND original size
+	// We need to use the larger of the two to ensure both fit in the size fields
+	dataSize := uint64(len(dataToWrite))
+	maxSize := dataSize
+	if actualCompressionType != CompressionNone && originalSize > maxSize {
+		maxSize = originalSize
+	}
+
+	var recordType byte
 	switch {
-	case dataSize <= 0xFF: // 255 bytes
+	case maxSize <= 0xFF: // 255 bytes
 		recordType = Type1Byte
-	case dataSize <= 0xFFFF: // 64KB
+	case maxSize <= 0xFFFF: // 64KB
 		recordType = Type2Bytes
-	case dataSize <= 0xFFFFFFFF: // 4GB
+	case maxSize <= 0xFFFFFFFF: // 4GB
 		recordType = Type4Bytes
 	default:
 		recordType = Type8Bytes
 	}
+
+	// Set compression flag in record type
+	recordType = setCompressionType(recordType, actualCompressionType)
 
 	// Save position before writing
 	recordPos, err := s.file.Seek(0, io.SeekCurrent)
@@ -490,7 +578,8 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 	// Initialize streaming CRC calculation based on record type
 	var hasher16 *crc16Hash
 	var hasher32 hash.Hash32
-	if recordType == Type1Byte {
+	baseType := getBaseType(recordType)
+	if baseType == Type1Byte {
 		hasher16 = newCRC16Hash()
 	} else {
 		hasher32 = crc32.NewIEEE()
@@ -527,9 +616,30 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 		return 0, fmt.Errorf("error writing key: %w", err)
 	}
 
-	// Write the data size according to the type
+	// If compressed, write original size first
+	if actualCompressionType != CompressionNone {
+		var originalSizeBuf []byte
+		switch baseType {
+		case Type1Byte:
+			originalSizeBuf = []byte{byte(originalSize)}
+		case Type2Bytes:
+			originalSizeBuf = make([]byte, 2)
+			binary.LittleEndian.PutUint16(originalSizeBuf, uint16(originalSize))
+		case Type4Bytes:
+			originalSizeBuf = make([]byte, 4)
+			binary.LittleEndian.PutUint32(originalSizeBuf, uint32(originalSize))
+		case Type8Bytes:
+			originalSizeBuf = make([]byte, 8)
+			binary.LittleEndian.PutUint64(originalSizeBuf, originalSize)
+		}
+		if err := writeAndHash(originalSizeBuf); err != nil {
+			return 0, fmt.Errorf("error writing original size: %w", err)
+		}
+	}
+
+	// Write the compressed data size according to the type
 	var dataSizeBuf []byte
-	switch recordType {
+	switch baseType {
 	case Type1Byte:
 		dataSizeBuf = []byte{byte(dataSize)}
 	case Type2Bytes:
@@ -548,18 +658,18 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 
 	// Write the data in chunks to avoid memory pressure for large values
 	const bufferSize = 64 * 1024 // 64KB buffer
-	for offset := 0; offset < len(data); offset += bufferSize {
+	for offset := 0; offset < len(dataToWrite); offset += bufferSize {
 		end := offset + bufferSize
-		if end > len(data) {
-			end = len(data)
+		if end > len(dataToWrite) {
+			end = len(dataToWrite)
 		}
-		if err := writeAndHash(data[offset:end]); err != nil {
+		if err := writeAndHash(dataToWrite[offset:end]); err != nil {
 			return 0, fmt.Errorf("error writing data chunk: %w", err)
 		}
 	}
 
 	// Calculate and write CRC
-	if recordType == Type1Byte {
+	if baseType == Type1Byte {
 		// CRC-16
 		crc := hasher16.Sum16()
 		crcBuf := make([]byte, 2)
@@ -687,8 +797,46 @@ func (s *SKV) readRecord(readData bool) (recordType byte, key []byte, data []byt
 	}
 	recordBuf = append(recordBuf, key...)
 
-	// Read data size
+	// Get compression type from record type
 	baseType := getBaseType(recordType)
+	compressionType := getCompressionType(recordType)
+
+	// Read original size if compressed
+	var originalSize uint64
+	var originalSizeBuf []byte
+	if compressionType != CompressionNone {
+		switch baseType {
+		case Type1Byte:
+			originalSizeBuf = make([]byte, 1)
+			if _, err := io.ReadFull(s.file, originalSizeBuf); err != nil {
+				return 0, nil, nil, 0, fmt.Errorf("error reading original size: %w", err)
+			}
+			originalSize = uint64(originalSizeBuf[0])
+		case Type2Bytes:
+			originalSizeBuf = make([]byte, 2)
+			if _, err := io.ReadFull(s.file, originalSizeBuf); err != nil {
+				return 0, nil, nil, 0, fmt.Errorf("error reading original size: %w", err)
+			}
+			originalSize = uint64(binary.LittleEndian.Uint16(originalSizeBuf))
+		case Type4Bytes:
+			originalSizeBuf = make([]byte, 4)
+			if _, err := io.ReadFull(s.file, originalSizeBuf); err != nil {
+				return 0, nil, nil, 0, fmt.Errorf("error reading original size: %w", err)
+			}
+			originalSize = uint64(binary.LittleEndian.Uint32(originalSizeBuf))
+		case Type8Bytes:
+			originalSizeBuf = make([]byte, 8)
+			if _, err := io.ReadFull(s.file, originalSizeBuf); err != nil {
+				return 0, nil, nil, 0, fmt.Errorf("error reading original size: %w", err)
+			}
+			originalSize = binary.LittleEndian.Uint64(originalSizeBuf)
+		default:
+			return 0, nil, nil, 0, fmt.Errorf("unknown record type: 0x%02X", recordType)
+		}
+		recordBuf = append(recordBuf, originalSizeBuf...)
+	}
+
+	// Read data size
 	var dataSize uint64
 	var dataSizeBuf []byte
 
@@ -812,7 +960,16 @@ func (s *SKV) readRecord(readData bool) (recordType byte, key []byte, data []byt
 
 		// Only return data if requested
 		if readData {
-			data = tempData
+			// Decompress if necessary
+			if compressionType != CompressionNone && dataSize > 0 {
+				decompressed, err := decompress(tempData, compressionType, int(originalSize))
+				if err != nil {
+					return 0, nil, nil, 0, fmt.Errorf("error decompressing data: %w", err)
+				}
+				data = decompressed
+			} else {
+				data = tempData
+			}
 		}
 
 		// Read and verify CRC (skip verification for deleted records since type byte was modified)
@@ -1745,6 +1902,12 @@ func (s *SKV) GetOrDefaultString(key string, defaultValue string) string {
 // ForEach iterates over all active keys and values in the database
 // The callback function receives each key-value pair
 // If the callback returns an error, iteration stops and the error is returned
+//
+// Note: Iteration order is NOT guaranteed (iterates over internal cache map)
+// For ordered iteration, use NewCursor() or AllCursor()
+//
+// Performance: Values are read on-demand from disk, so memory usage is constant
+// regardless of database size (only keys are in memory via cache)
 func (s *SKV) ForEach(fn func(key []byte, value []byte) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

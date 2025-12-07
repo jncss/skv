@@ -31,7 +31,7 @@ Offset  Size  Description
 5       1     Version patch
 ```
 
-**Current version:** 0.1.0
+**Current version:** 0.3.0
 
 ### Record Structure
 ```

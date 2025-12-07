@@ -24,6 +24,7 @@ A Go library for storing key/value data in a sequential binary file format.
 ## Features
 
 - **Write-Ahead Log (WAL)** - Crash recovery with automatic operation replay for guaranteed durability
+- **Compression** - Transparent LZ4/Snappy compression for reduced storage (optional, configurable per database)
 - **Sequential file format** - All writes are append-only for simplicity and reliability
 - **Binary encoding** - Efficient storage with variable-length data size fields
 - **CRC integrity checking** - Every record includes CRC-16 or CRC-32 checksum for corruption detection
@@ -58,9 +59,9 @@ Every SKV file starts with a 6-byte header:
 | Field | Size | Description |
 |-------|------|-------------|
 | Magic | 3 bytes | Always "SKV" (0x53 0x4B 0x56) to identify the file format |
-| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.2.0) |
+| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.3.0) |
 
-**Current version:** 0.2.0
+**Current version:** 0.3.0
 
 ### Record Format
 
@@ -1012,6 +1013,47 @@ This library is best suited for:
 **Cache benefits:** The in-memory cache dramatically improves read performance compared to sequential file scanning. For databases with thousands or millions of keys, Get/Delete/Keys operations are instant. The cache stores only positions, not data values, making it memory-efficient even for databases with very large values.
 
 **Free space reuse:** When records are deleted or updated, the library automatically tracks and reuses free space, reducing file bloat. Tested with thousands of delete/update cycles, showing effective space management and ~37% file size reduction after compaction.
+
+## Compression
+
+SKV supports transparent data compression to reduce storage space:
+
+```go
+// Open with LZ4 compression
+db, err := skv.OpenWithOptions("mydata.skv", &skv.Options{
+    Compression: skv.CompressionLZ4,
+})
+
+// All operations transparently compress/decompress
+db.Put([]byte("key"), largeData) // Automatically compressed
+data, _ := db.Get([]byte("key"))  // Automatically decompressed
+```
+
+**Supported algorithms:**
+- **LZ4** - Best general purpose (very fast, good compression)
+- **Snappy** - Maximum speed with acceptable compression
+- **None** - No compression (default)
+
+**Key features:**
+- Threshold-based: Only data ≥128 bytes is considered
+- Adaptive: Compression only used if it reduces size
+- Mixed support: Different records can use different compression
+- Transparent: Automatic compression/decompression
+
+See [COMPRESSION.md](COMPRESSION.md) for detailed documentation including:
+- Performance benchmarks
+- When to use each algorithm
+- Compression format details
+- Best practices
+
+## Additional Documentation
+
+- **[WAL.md](WAL.md)** - Write-Ahead Log internals and crash recovery
+- **[COMPRESSION.md](COMPRESSION.md)** - Compression algorithms and performance
+- **[CURSORS.md](CURSORS.md)** - Cursor iteration and range queries
+- **[TESTING.md](TESTING.md)** - Test coverage and methodology
+- **[examples/](examples/)** - Comprehensive usage examples
+- **[tools/cli/README.md](tools/cli/README.md)** - Command-line interface guide
 
 ## License
 
