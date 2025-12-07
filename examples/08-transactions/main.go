@@ -137,9 +137,9 @@ func main() {
 	db.PutString("status:pending", "true")
 
 	tx = db.Begin()
-	tx.PutString("status:new", "true")         // New key
-	tx.UpdateString("status:active", "false")  // Update existing
-	tx.DeleteString("status:pending")          // Delete existing
+	tx.PutString("status:new", "true")        // New key
+	tx.UpdateString("status:active", "false") // Update existing
+	tx.DeleteString("status:pending")         // Delete existing
 
 	fmt.Println("   Operations:")
 	fmt.Println("   - Put:    status:new")

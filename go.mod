@@ -3,6 +3,6 @@ module github.com/jncss/skv
 go 1.24.0
 
 require (
-	github.com/golang/snappy v1.0.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.22 // indirect
+	github.com/golang/snappy v1.0.0
+	github.com/pierrec/lz4/v4 v4.1.22
 )

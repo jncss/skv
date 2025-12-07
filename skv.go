@@ -452,7 +452,7 @@ func (s *SKV) recoverFromWAL() error {
 	var currentTxID uint64 = 0
 
 	// Replay operations
-	for _, entry := range entries {
+	for i, entry := range entries {
 		switch entry.OpType {
 		case WALOpBeginTx:
 			// Start a new transaction
@@ -518,11 +518,17 @@ func (s *SKV) recoverFromWAL() error {
 			}
 
 		case WALOpCommit:
-			// Old-style commit marker - stop here
-			break
+			// Old-style commit marker - stop processing here
+			// (for backward compatibility with pre-transaction WAL)
+			if s.logger != nil {
+				s.logger.Debug("WAL recovery: found old-style commit marker, stopping",
+					Field{Key: "entry_index", Value: i})
+			}
+			goto endRecovery
 		}
 	}
 
+endRecovery:
 	// Any transactions that were not committed or rolled back are discarded
 	if len(activeTxs) > 0 {
 		if s.logger != nil {
