@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -21,7 +22,7 @@ const (
 	HeaderMagic  = "SKV" // Magic bytes to identify SKV files
 	HeaderSize   = 6     // Total header size: 3 bytes magic + 3 bytes version
 	VersionMajor = 0     // Major version number
-	VersionMinor = 3     // Minor version number
+	VersionMinor = 4     // Minor version number
 	VersionPatch = 0     // Patch version number
 )
 
@@ -262,6 +263,7 @@ type SKV struct {
 	indexes         map[string]*Index // Secondary indexes
 	wal             *WAL              // Write-ahead log for durability
 	compressionType CompressionType   // Compression algorithm to use for new records
+	logger          Logger            // Logger for structured logging
 	mu              sync.RWMutex      // Mutex for thread-safe operations
 }
 
@@ -271,12 +273,18 @@ type Options struct {
 	// Default: CompressionNone (no compression)
 	// Available: CompressionSnappy, CompressionLZ4
 	Compression CompressionType
+
+	// Logger specifies the logger to use for structured logging
+	// Default: NullLogger() (no logging, zero overhead)
+	// Available: NewJSONLogger(), NewTextLogger()
+	Logger Logger
 }
 
 // DefaultOptions returns the default options for opening an SKV database
 func DefaultOptions() *Options {
 	return &Options{
 		Compression: CompressionNone,
+		Logger:      NullLogger(),
 	}
 }
 
@@ -289,6 +297,10 @@ func Open(name string) (*SKV, error) {
 func OpenWithOptions(name string, opts *Options) (*SKV, error) {
 	if opts == nil {
 		opts = DefaultOptions()
+	}
+	// Fill in missing fields with defaults
+	if opts.Logger == nil {
+		opts.Logger = NullLogger()
 	}
 	// Add .skv extension if it doesn't have it
 	if len(name) < 4 || name[len(name)-4:] != ".skv" {
@@ -303,7 +315,7 @@ func OpenWithOptions(name string, opts *Options) (*SKV, error) {
 
 	// Open WAL file (same name with .wal extension)
 	walPath := name + ".wal"
-	wal, err := OpenWAL(walPath)
+	wal, err := OpenWAL(walPath, opts.Logger)
 	if err != nil {
 		file.Close()
 		return nil, fmt.Errorf("error opening WAL: %w", err)
@@ -317,6 +329,7 @@ func OpenWithOptions(name string, opts *Options) (*SKV, error) {
 		indexes:         make(map[string]*Index),
 		wal:             wal,
 		compressionType: opts.Compression,
+		logger:          opts.Logger,
 	}
 
 	// Check if file is new or existing
@@ -1011,6 +1024,8 @@ func (s *SKV) readRecord(readData bool) (recordType byte, key []byte, data []byt
 // Returns ErrKeyExists if the key already exists
 // Returns ctx.Err() if context is cancelled
 func (s *SKV) PutCtx(ctx context.Context, key []byte, data []byte) error {
+	startTime := time.Now()
+
 	// Check context before acquiring lock
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1044,6 +1059,12 @@ func (s *SKV) PutCtx(ctx context.Context, key []byte, data []byte) error {
 	// Write the record
 	recordPos, err := s.writeRecord(key, data)
 	if err != nil {
+		s.logger.Error("Put failed",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "data_size", Value: len(data)},
+			Field{Key: "error", Value: err.Error()},
+			Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+		)
 		return err
 	}
 
@@ -1062,6 +1083,14 @@ func (s *SKV) PutCtx(ctx context.Context, key []byte, data []byte) error {
 	if err := s.wal.Truncate(); err != nil {
 		return fmt.Errorf("error truncating WAL: %w", err)
 	}
+
+	s.logger.Debug("Put successful",
+		Field{Key: "key", Value: string(key)},
+		Field{Key: "data_size", Value: len(data)},
+		Field{Key: "compression", Value: s.compressionType.String()},
+		Field{Key: "position", Value: recordPos},
+		Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+	)
 
 	return nil
 }
@@ -1110,6 +1139,8 @@ func (s *SKV) putInternal(key []byte, data []byte) error {
 // Returns ErrKeyNotFound if the key doesn't exist
 // Returns ctx.Err() if context is cancelled
 func (s *SKV) UpdateCtx(ctx context.Context, key []byte, data []byte) error {
+	startTime := time.Now()
+
 	// Check context before acquiring lock
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1139,12 +1170,23 @@ func (s *SKV) UpdateCtx(ctx context.Context, key []byte, data []byte) error {
 
 	// Key exists, delete it first (internal version without lock)
 	if err := s.deleteInternal(key); err != nil {
+		s.logger.Error("Update failed during delete",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "error", Value: err.Error()},
+			Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+		)
 		return err
 	}
 
 	// Write the record
 	recordPos, err := s.writeRecord(key, data)
 	if err != nil {
+		s.logger.Error("Update failed during write",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "data_size", Value: len(data)},
+			Field{Key: "error", Value: err.Error()},
+			Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+		)
 		return err
 	}
 
@@ -1163,6 +1205,13 @@ func (s *SKV) UpdateCtx(ctx context.Context, key []byte, data []byte) error {
 	if err := s.wal.Truncate(); err != nil {
 		return fmt.Errorf("error truncating WAL: %w", err)
 	}
+
+	s.logger.Debug("Update successful",
+		Field{Key: "key", Value: string(key)},
+		Field{Key: "data_size", Value: len(data)},
+		Field{Key: "position", Value: recordPos},
+		Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+	)
 
 	return nil
 }
@@ -1258,6 +1307,8 @@ var ErrKeyExists = errors.New("key already exists")
 // Returns ErrKeyNotFound if the key doesn't exist or is deleted
 // Returns ctx.Err() if context is cancelled
 func (s *SKV) GetCtx(ctx context.Context, key []byte) ([]byte, error) {
+	startTime := time.Now()
+
 	// Check context before acquiring lock
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1278,19 +1329,40 @@ func (s *SKV) GetCtx(ctx context.Context, key []byte) ([]byte, error) {
 	// Check cache for position
 	position, found := s.cache[string(key)]
 	if !found {
+		s.logger.Debug("Get failed: key not found",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+		)
 		return nil, ErrKeyNotFound
 	}
 
 	// Read from file at cached position
 	if _, err := s.file.Seek(position, io.SeekStart); err != nil {
+		s.logger.Error("Get failed: seek error",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "error", Value: err.Error()},
+			Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+		)
 		return nil, fmt.Errorf("error seeking to position: %w", err)
 	}
 
 	// Read the record
 	_, _, data, _, err := s.readRecord(true)
 	if err != nil {
+		s.logger.Error("Get failed: read error",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "error", Value: err.Error()},
+			Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+		)
 		return nil, err
 	}
+
+	s.logger.Debug("Get successful",
+		Field{Key: "key", Value: string(key)},
+		Field{Key: "data_size", Value: len(data)},
+		Field{Key: "cache_hit", Value: true},
+		Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+	)
 
 	return data, nil
 }
@@ -1304,6 +1376,8 @@ func (s *SKV) Get(key []byte) ([]byte, error) {
 // DeleteCtx deletes a key by setting the deleted bit in its record with context support
 // Returns ctx.Err() if context is cancelled
 func (s *SKV) DeleteCtx(ctx context.Context, key []byte) error {
+	startTime := time.Now()
+
 	// Check context before acquiring lock
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1324,6 +1398,11 @@ func (s *SKV) DeleteCtx(ctx context.Context, key []byte) error {
 
 	// Perform the delete
 	if err := s.deleteInternal(key); err != nil {
+		s.logger.Error("Delete failed",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "error", Value: err.Error()},
+			Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+		)
 		return err
 	}
 
@@ -1336,6 +1415,11 @@ func (s *SKV) DeleteCtx(ctx context.Context, key []byte) error {
 	if err := s.wal.Truncate(); err != nil {
 		return fmt.Errorf("error truncating WAL: %w", err)
 	}
+
+	s.logger.Debug("Delete successful",
+		Field{Key: "key", Value: string(key)},
+		Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+	)
 
 	return nil
 }
@@ -1433,6 +1517,8 @@ type Stats struct {
 
 // Verify checks the file integrity and returns statistics
 func (s *SKV) Verify() (*Stats, error) {
+	startTime := time.Now()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1514,6 +1600,16 @@ func (s *SKV) Verify() (*Stats, error) {
 		stats.AverageDataSize = float64(totalDataSize) / float64(stats.TotalRecords)
 	}
 
+	s.logger.Info("Verify completed",
+		Field{Key: "file_size", Value: stats.FileSize},
+		Field{Key: "total_records", Value: stats.TotalRecords},
+		Field{Key: "active_records", Value: stats.ActiveRecords},
+		Field{Key: "deleted_records", Value: stats.DeletedRecords},
+		Field{Key: "wasted_percent", Value: fmt.Sprintf("%.2f", stats.WastedPercent)},
+		Field{Key: "efficiency", Value: fmt.Sprintf("%.2f", stats.Efficiency)},
+		Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+	)
+
 	return stats, nil
 }
 
@@ -1556,6 +1652,15 @@ func (s *SKV) Compact() error {
 // This ensures that if there's any failure during compaction, the original
 // file remains intact and no data is lost.
 func (s *SKV) compactInternalCtx(ctx context.Context) error {
+	startTime := time.Now()
+
+	// Get initial stats
+	initialSize, _ := s.file.Stat()
+	var beforeBytes int64 = 0
+	if initialSize != nil {
+		beforeBytes = initialSize.Size()
+	}
+
 	// Create temporary file in the same directory as the database
 	// (important for atomic rename to work on all platforms)
 	tmpFile, err := os.CreateTemp(filepath.Dir(s.filePath), ".skv-compact-*.tmp")
@@ -1580,6 +1685,10 @@ func (s *SKV) compactInternalCtx(ctx context.Context) error {
 	header[5] = byte(VersionPatch)
 	if _, err := tmpFile.Write(header); err != nil {
 		tmpFile.Close()
+		s.logger.Error("Compact failed during header write",
+			Field{Key: "error", Value: err.Error()},
+			Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+		)
 		return fmt.Errorf("error writing header to temp file: %w", err)
 	}
 
@@ -1767,6 +1876,28 @@ func (s *SKV) compactInternalCtx(ctx context.Context) error {
 	// Clear free space list (compaction eliminates all deleted records)
 	s.freeSpace = make([]FreeSpace, 0)
 
+	// Get final stats
+	finalSize, _ := s.file.Stat()
+	var afterBytes int64 = 0
+	if finalSize != nil {
+		afterBytes = finalSize.Size()
+	}
+
+	savedBytes := beforeBytes - afterBytes
+	savedPercent := float64(0)
+	if beforeBytes > 0 {
+		savedPercent = (float64(savedBytes) / float64(beforeBytes)) * 100.0
+	}
+
+	s.logger.Info("Compact completed",
+		Field{Key: "before_bytes", Value: beforeBytes},
+		Field{Key: "after_bytes", Value: afterBytes},
+		Field{Key: "saved_bytes", Value: savedBytes},
+		Field{Key: "saved_percent", Value: fmt.Sprintf("%.2f", savedPercent)},
+		Field{Key: "active_records", Value: len(s.cache)},
+		Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+	)
+
 	return nil
 }
 
@@ -1778,6 +1909,9 @@ func (s *SKV) compactInternal() error {
 
 // Keys returns a list of all active keys in the database
 func (s *SKV) Keys() ([][]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	// Convert cache keys to slice
 	keys := make([][]byte, 0, len(s.cache))
 	for keyStr := range s.cache {
@@ -2213,14 +2347,54 @@ func (s *SKV) PutStream(key []byte, reader io.Reader, size int64) error {
 		return ErrKeyExists
 	}
 
+	// Save checkpoint for potential rollback
+	checkpoint, err := s.file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return fmt.Errorf("error getting file position: %w", err)
+	}
+
 	// Write the record using streaming approach
 	recordPos, err := s.writeRecordStream(key, reader, uint64(size))
 	if err != nil {
+		// Rollback: truncate file to checkpoint position
+		if truncErr := s.file.Truncate(checkpoint); truncErr != nil {
+			s.logger.Error("Failed to rollback after PutStream error",
+				Field{Key: "key", Value: string(key)},
+				Field{Key: "original_error", Value: err.Error()},
+				Field{Key: "rollback_error", Value: truncErr.Error()},
+			)
+			return fmt.Errorf("write failed and rollback failed: %w (rollback: %v)", err, truncErr)
+		}
+		// Restore file position
+		s.file.Seek(checkpoint, io.SeekStart)
+
+		s.logger.Warn("PutStream failed, rolled back",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "error", Value: err.Error()},
+		)
 		return err
 	}
 
-	// Update cache with record start position
+	// Sync to ensure durability before updating cache
+	if err := s.file.Sync(); err != nil {
+		// Rollback on sync failure
+		s.file.Truncate(checkpoint)
+		s.file.Seek(checkpoint, io.SeekStart)
+		s.logger.Error("PutStream sync failed, rolled back",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "error", Value: err.Error()},
+		)
+		return fmt.Errorf("error syncing file: %w", err)
+	}
+
+	// Update cache with record start position (commit point)
 	s.cache[string(key)] = recordPos
+
+	s.logger.Debug("PutStream successful",
+		Field{Key: "key", Value: string(key)},
+		Field{Key: "size", Value: size},
+		Field{Key: "position", Value: recordPos},
+	)
 
 	return nil
 }
@@ -2250,19 +2424,65 @@ func (s *SKV) UpdateStream(key []byte, reader io.Reader, size int64) error {
 		return ErrKeyNotFound
 	}
 
-	// Key exists, delete it first (internal version without lock)
-	if err := s.deleteInternal(key); err != nil {
-		return err
+	// Save checkpoint BEFORE any modifications
+	checkpoint, err := s.file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return fmt.Errorf("error getting file position: %w", err)
 	}
 
-	// Write the record using streaming approach
+	// Write the new record using streaming approach
 	recordPos, err := s.writeRecordStream(key, reader, uint64(size))
 	if err != nil {
+		// Rollback: truncate file to checkpoint position
+		if truncErr := s.file.Truncate(checkpoint); truncErr != nil {
+			s.logger.Error("Failed to rollback after UpdateStream error",
+				Field{Key: "key", Value: string(key)},
+				Field{Key: "original_error", Value: err.Error()},
+				Field{Key: "rollback_error", Value: truncErr.Error()},
+			)
+			return fmt.Errorf("write failed and rollback failed: %w (rollback: %v)", err, truncErr)
+		}
+		// Restore file position
+		s.file.Seek(checkpoint, io.SeekStart)
+
+		s.logger.Warn("UpdateStream failed, rolled back",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "error", Value: err.Error()},
+		)
 		return err
 	}
 
-	// Update cache with record start position
+	// Sync to ensure new record is durable before deleting old one
+	if err := s.file.Sync(); err != nil {
+		// Rollback on sync failure
+		s.file.Truncate(checkpoint)
+		s.file.Seek(checkpoint, io.SeekStart)
+		s.logger.Error("UpdateStream sync failed, rolled back",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "error", Value: err.Error()},
+		)
+		return fmt.Errorf("error syncing file: %w", err)
+	}
+
+	// New record is now durable. Delete old record (mark as tombstone).
+	// We do this after the write succeeds to ensure atomicity.
+	if err := s.deleteInternal(key); err != nil {
+		// This is a problem - new record is written but old record wasn't deleted
+		// Log the error but continue since the update is partially successful
+		s.logger.Error("UpdateStream: failed to delete old record, but new record was written",
+			Field{Key: "key", Value: string(key)},
+			Field{Key: "error", Value: err.Error()},
+		)
+	}
+
+	// Update cache with new record start position (commit point)
 	s.cache[string(key)] = recordPos
+
+	s.logger.Debug("UpdateStream successful",
+		Field{Key: "key", Value: string(key)},
+		Field{Key: "size", Value: size},
+		Field{Key: "position", Value: recordPos},
+	)
 
 	return nil
 }

@@ -11,7 +11,7 @@ func TestWALBasicOperations(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "test.wal")
 
-	wal, err := OpenWAL(walPath)
+	wal, err := OpenWAL(walPath, NullLogger())
 	if err != nil {
 		t.Fatalf("Failed to open WAL: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestWALBasicOperations(t *testing.T) {
 	// Close and reopen to recover
 	wal.Close()
 
-	wal, err = OpenWAL(walPath)
+	wal, err = OpenWAL(walPath, NullLogger())
 	if err != nil {
 		t.Fatalf("Failed to reopen WAL: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestWALTruncate(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "test.wal")
 
-	wal, err := OpenWAL(walPath)
+	wal, err := OpenWAL(walPath, NullLogger())
 	if err != nil {
 		t.Fatalf("Failed to open WAL: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestWALCommitMarker(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "test.wal")
 
-	wal, err := OpenWAL(walPath)
+	wal, err := OpenWAL(walPath, NullLogger())
 	if err != nil {
 		t.Fatalf("Failed to open WAL: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestWALDisableEnable(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "test.wal")
 
-	wal, err := OpenWAL(walPath)
+	wal, err := OpenWAL(walPath, NullLogger())
 	if err != nil {
 		t.Fatalf("Failed to open WAL: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestWALLargeData(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "test.wal")
 
-	wal, err := OpenWAL(walPath)
+	wal, err := OpenWAL(walPath, NullLogger())
 	if err != nil {
 		t.Fatalf("Failed to open WAL: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestWALCorruptedEntry(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "test.wal")
 
-	wal, err := OpenWAL(walPath)
+	wal, err := OpenWAL(walPath, NullLogger())
 	if err != nil {
 		t.Fatalf("Failed to open WAL: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestWALCorruptedEntry(t *testing.T) {
 	file.Close()
 
 	// Reopen and try to recover
-	wal, err = OpenWAL(walPath)
+	wal, err = OpenWAL(walPath, NullLogger())
 	if err != nil {
 		t.Fatalf("Failed to reopen WAL: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestWALEmptyKey(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "test.wal")
 
-	wal, err := OpenWAL(walPath)
+	wal, err := OpenWAL(walPath, NullLogger())
 	if err != nil {
 		t.Fatalf("Failed to open WAL: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestWALConcurrentWrites(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "test.wal")
 
-	wal, err := OpenWAL(walPath)
+	wal, err := OpenWAL(walPath, NullLogger())
 	if err != nil {
 		t.Fatalf("Failed to open WAL: %v", err)
 	}

@@ -1,21 +1,4 @@
-## 2. **Gestió d'errors millorada**
-
 - **Transaccions atòmiques**: Afegir suport per a operacions batch atòmiques (tot o res).
-- **Recuperació d'errors**: Si `writeRecordStream` falla a mig camí, el fitxer pot quedar en estat inconsistent. Caldria rollback o un flag de "record incomplet".
 
-## 3. **Funcionalitats noves**
-
-- **Cursor lazy loading**: Els cursors carreguen totes les claus en memòria per ordenar-les amb `sort.Strings()`. Per a bases de dades amb milions de claus, això pot consumir molta RAM. Una optimització futura podria usar un índex B-tree extern per evitar carregar tot el keyspace. **Nota**: `ForEach` ja itera eficientment sense carregar valors en memòria.
-- **Compactació automàtica**: Trigger automàtic quan `WastedPercent > X%`.
-
-## 4. **Robustesa**
-
-- **Checksums del fitxer complet**: Un checksum global per detectar corrupció.
-- **Locks a nivell de registre**: Ara és lock global, podria ser més granular per concurrència.
-
-## 5. **API/UX**
-
-- **Mètriques**: Exportar mètriques (operacions/s, latència, etc.).
-- **Logging estructurat**: Afegir logging opcional per debugging.
 
 

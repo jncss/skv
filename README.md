@@ -3,8 +3,8 @@
 A Go library for storing key/value data in a sequential binary file format.
 
 [![Production Ready](https://img.shields.io/badge/production-ready-green.svg)](https://github.com/jncss/skv)
-[![Test Coverage](https://img.shields.io/badge/coverage-79.7%25-green.svg)](https://github.com/jncss/skv)
-[![Tests Passing](https://img.shields.io/badge/tests-206%20passing-brightgreen.svg)](https://github.com/jncss/skv)
+[![Test Coverage](https://img.shields.io/badge/coverage-79.1%25-green.svg)](https://github.com/jncss/skv)
+[![Tests Passing](https://img.shields.io/badge/tests-220%20passing-brightgreen.svg)](https://github.com/jncss/skv)
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
 **Performance Metrics:**
@@ -18,12 +18,13 @@ A Go library for storing key/value data in a sequential binary file format.
 - 📊 **WAL overhead** - ~73% slower writes, 0% impact on reads
 - 🧵 **1,900 ops/sec** - Concurrent operations (10 goroutines, race-free)
 - 📦 **37% reduction** - Average compaction savings
-- ✅ **206 tests** - All passing (comprehensive coverage including streaming, safety, context, indexes, cursors, and WAL)
+- ✅ **220 tests** - All passing (comprehensive coverage including streaming, safety, context, indexes, cursors, WAL, rollback protection, and string convenience functions)
 - 💾 **O(1) memory** - Streaming operations with constant memory usage regardless of file size
 
 ## Features
 
 - **Write-Ahead Log (WAL)** - Crash recovery with automatic operation replay for guaranteed durability
+- **Structured Logging** - Built-in logging support with JSONLogger, TextLogger, and custom loggers for observability
 - **Compression** - Transparent LZ4/Snappy compression for reduced storage (optional, configurable per database)
 - **Sequential file format** - All writes are append-only for simplicity and reliability
 - **Binary encoding** - Efficient storage with variable-length data size fields
@@ -33,7 +34,7 @@ A Go library for storing key/value data in a sequential binary file format.
 - **Thread-safe** - All operations are protected with mutex locks for safe concurrent access within a single process
 - **Production-ready** - Stress tested with 10,000+ records and concurrent operations
 - **Backup/Restore** - JSON-based backups with smart encoding (text/base64) for portability
-- **Streaming operations** - Memory-efficient PutStream/GetStream for large values with incremental CRC calculation
+- **Streaming operations** - Memory-efficient PutStream/GetStream for large values with incremental CRC calculation and rollback protection
 - **Context support** - Context-aware operations (PutCtx, GetCtx, UpdateCtx, DeleteCtx, CompactCtx) for timeouts and cancellation
 - **Secondary indexes** - Fast lookups by alternative keys with automatic index maintenance
 - **Cursors** - Ordered iteration with range queries, prefix matching, and bidirectional traversal for both primary and secondary keys
@@ -59,9 +60,9 @@ Every SKV file starts with a 6-byte header:
 | Field | Size | Description |
 |-------|------|-------------|
 | Magic | 3 bytes | Always "SKV" (0x53 0x4B 0x56) to identify the file format |
-| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.3.0) |
+| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.4.0) |
 
-**Current version:** 0.3.0
+**Current version:** 0.4.0
 
 ### Record Format
 
@@ -569,6 +570,7 @@ for key, value := range results {
 
 For easier string handling, the library provides string versions of all operations:
 
+**Basic Operations:**
 - `PutString(key string, value string) error`
 - `UpdateString(key string, value string) error`
 - `GetString(key string) (string, error)`
@@ -580,11 +582,41 @@ For easier string handling, the library provides string versions of all operatio
 - `PutBatchString(items map[string]string) error`
 - `GetBatchString(keys []string) (map[string]string, error)`
 
+**Cursor Operations:**
+- `NewCursorString(from, to string, reverse bool) *Cursor`
+- `PrefixCursorString(prefix string, reverse bool) *Cursor`
+- `AllCursorString(reverse bool) *Cursor`
+- `NewIndexCursorString(indexName, from, to string, reverse bool) (*Cursor, error)`
+- `PrefixIndexCursorString(indexName, prefix string, reverse bool) (*Cursor, error)`
+- `AllIndexCursorString(indexName string, reverse bool) (*Cursor, error)`
+- `cursor.NextString() (string, string, error)`
+- `cursor.KeyString() string`
+- `cursor.ValueString() (string, error)`
+- `cursor.SeekString(key string) error`
+- `cursor.HasPrefixString(prefix string) bool`
+- `cursor.KeysString() []string`
+- `cursor.CollectString() ([]string, []string, error)`
+
+**Index Operations:**
+- `GetByIndexString(indexName, secondaryKey string) ([]byte, error)`
+- `GetAllByIndexString(indexName, secondaryKey string) ([][]byte, error)`
+- `HasIndexString(indexName, secondaryKey string) bool`
+
 **Example:**
 ```go
 db.PutString("username", "alice")
 name, _ := db.GetString("username")
 db.UpdateString("username", "alice_smith")
+
+// Cursor with strings
+cursor := db.PrefixCursorString("user:", false)
+for {
+    key, value, err := cursor.NextString()
+    if err == io.EOF {
+        break
+    }
+    fmt.Printf("%s = %s\n", key, value)
+}
 ```
 
 ### File Operations
@@ -594,9 +626,9 @@ Store and retrieve files directly from the database:
 - `PutFile(key string, filePath string) error` - Store a file from disk
 - `GetFile(key string, filePath string) error` - Retrieve to a file on disk
 - `UpdateFile(key string, filePath string) error` - Update with file contents
-- `PutStream(key []byte, reader io.Reader, size int64) error` - Store value from a reader (memory-efficient)
+- `PutStream(key []byte, reader io.Reader, size int64) error` - Store value from a reader (memory-efficient, with rollback protection)
 - `PutStreamString(key string, reader io.Reader, size int64) error` - Store using string key
-- `UpdateStream(key []byte, reader io.Reader, size int64) error` - Update value from a reader
+- `UpdateStream(key []byte, reader io.Reader, size int64) error` - Update value from a reader (with rollback protection)
 - `UpdateStreamString(key string, reader io.Reader, size int64) error` - Update using string key
 - `GetStream(key []byte, writer io.Writer) (int64, error)` - Stream value to a writer (memory-efficient)
 - `GetStreamString(key string, writer io.Writer) (int64, error)` - Stream value using string key
@@ -608,6 +640,17 @@ All streaming operations (PutStream, GetStream, UpdateStream) and internal opera
 - **Small files** (≤255 bytes): Negligible difference between regular Put/Get and streaming
 - **Large files** (>1MB): Significant memory savings - uses only 64KB regardless of file size
 - **Very large files** (>1GB): Essential to use streaming - regular Put/Get would require loading entire file into memory
+
+**Rollback Protection:**
+
+PutStream and UpdateStream include checkpoint-based rollback protection to ensure database integrity:
+
+- **Atomic writes**: Either the entire key-value is written or nothing (no partial records)
+- **Checkpoint mechanism**: File position saved before write, truncated on failure
+- **Original value preserved**: UpdateStream keeps the old value if the new write fails
+- **No WAL overhead**: Unlike regular Put/Update, streams use truncate instead of WAL to avoid memory buffering
+- **Consistent state**: Database remains in clean state after failed operations, ready for retry
+- **Logged events**: All rollback operations are logged (Warn on successful rollback, Error on rollback failure) for observability
 
 The library automatically handles CRC verification incrementally during all operations:
 - **Writing**: `PutStream`, `UpdateStream`, and `writeRecordAtPosition` calculate CRC while streaming data

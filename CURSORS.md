@@ -272,6 +272,99 @@ Get just the keys:
 keys := cursor.Keys()
 ```
 
+## String Convenience Functions
+
+For easier string handling, SKV provides string-based convenience functions for all cursor operations. These avoid the need for explicit byte slice conversions.
+
+### Creating Cursors with Strings
+
+```go
+// Primary key cursors with string range
+cursor := db.NewCursorString("start", "end", false)
+
+// Index cursors with string range
+cursor, _ := db.NewIndexCursorString("by_email", "alice@", "bob@", false)
+
+// Prefix cursors with string
+cursor := db.PrefixCursorString("user:", false)
+cursor, _ := db.PrefixIndexCursorString("by_email", "admin@", false)
+
+// All cursors (string variants for consistency)
+cursor := db.AllCursorString(false)
+cursor, _ := db.AllIndexCursorString("by_category", true)
+```
+
+### Reading Data as Strings
+
+```go
+// Get current key/value as strings
+key := cursor.KeyString()
+value, err := cursor.ValueString()
+
+// Iterate with strings
+for {
+    key, value, err := cursor.NextString()
+    if err == io.EOF {
+        break
+    }
+    // key and value are strings
+    fmt.Printf("%s = %s\n", key, value)
+}
+```
+
+### Navigation with Strings
+
+```go
+// Seek to a string key
+cursor.SeekString("target-key")
+
+// Check prefix with string
+if cursor.HasPrefixString("user:") {
+    // Current key starts with "user:"
+}
+```
+
+### Collecting as Strings
+
+```go
+// Get all keys as strings
+keys := cursor.KeysString()
+
+// Collect all key-value pairs as strings
+keys, values, err := cursor.CollectString()
+for i := range keys {
+    fmt.Printf("%s = %s\n", keys[i], values[i])
+}
+```
+
+### Complete Example
+
+```go
+// Create cursor with string range
+cursor := db.NewCursorString("user:100", "user:199", false)
+defer cursor.Close()
+
+// Iterate with strings
+err := cursor.ForEach(func(key, value []byte) bool {
+    // Convert once for all operations
+    keyStr := string(key)
+    valueStr := string(value)
+    
+    fmt.Printf("%s = %s\n", keyStr, valueStr)
+    return true
+})
+
+// Or use string iterators directly
+cursor.Reset()
+for {
+    key, value, err := cursor.NextString()
+    if err == io.EOF {
+        break
+    }
+    fmt.Printf("%s = %s\n", key, value)
+}
+```
+
 ## Range Queries
 
 ### Inclusive Ranges

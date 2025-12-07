@@ -405,3 +405,107 @@ func (c *Cursor) IsLast() bool {
 func (c *Cursor) IsValid() bool {
 	return !c.closed && c.current >= 0 && c.current < len(c.keys)
 }
+
+// String convenience functions for cursor operations
+
+// NewCursorString creates a cursor with string-based range options
+func (s *SKV) NewCursorString(from, to string, reverse bool) *Cursor {
+	opts := &CursorOptions{Reverse: reverse}
+	if from != "" {
+		opts.From = []byte(from)
+	}
+	if to != "" {
+		opts.To = []byte(to)
+	}
+	return s.NewCursor(opts)
+}
+
+// NewIndexCursorString creates an index cursor with string-based range options
+func (s *SKV) NewIndexCursorString(indexName, from, to string, reverse bool) (*Cursor, error) {
+	opts := &CursorOptions{Reverse: reverse}
+	if from != "" {
+		opts.From = []byte(from)
+	}
+	if to != "" {
+		opts.To = []byte(to)
+	}
+	return s.NewIndexCursor(indexName, opts)
+}
+
+// PrefixCursorString creates a cursor with string prefix
+func (s *SKV) PrefixCursorString(prefix string, reverse bool) *Cursor {
+	return s.PrefixCursor([]byte(prefix), reverse)
+}
+
+// PrefixIndexCursorString creates an index cursor with string prefix
+func (s *SKV) PrefixIndexCursorString(indexName, prefix string, reverse bool) (*Cursor, error) {
+	return s.PrefixIndexCursor(indexName, []byte(prefix), reverse)
+}
+
+// AllCursorString is an alias for AllCursor for consistency
+func (s *SKV) AllCursorString(reverse bool) *Cursor {
+	return s.AllCursor(reverse)
+}
+
+// AllIndexCursorString is an alias for AllIndexCursor for consistency
+func (s *SKV) AllIndexCursorString(indexName string, reverse bool) (*Cursor, error) {
+	return s.AllIndexCursor(indexName, reverse)
+}
+
+// KeyString returns the current key as a string
+func (c *Cursor) KeyString() string {
+	key, _ := c.Key()
+	return string(key)
+}
+
+// ValueString returns the current value as a string
+func (c *Cursor) ValueString() (string, error) {
+	value, err := c.Value()
+	if err != nil {
+		return "", err
+	}
+	return string(value), nil
+}
+
+// NextString returns the next key-value pair as strings
+func (c *Cursor) NextString() (string, string, error) {
+	key, value, err := c.Next()
+	if err != nil {
+		return "", "", err
+	}
+	return string(key), string(value), nil
+}
+
+// SeekString seeks to a string key
+func (c *Cursor) SeekString(key string) error {
+	return c.Seek([]byte(key))
+}
+
+// HasPrefixString checks if current key has the string prefix
+func (c *Cursor) HasPrefixString(prefix string) bool {
+	return c.HasPrefix([]byte(prefix))
+}
+
+// KeysString returns all keys as strings
+func (c *Cursor) KeysString() []string {
+	result := make([]string, len(c.keys))
+	copy(result, c.keys)
+	return result
+}
+
+// CollectString collects all key-value pairs as strings
+func (c *Cursor) CollectString() ([]string, []string, error) {
+	keys, values, err := c.Collect()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	strKeys := make([]string, len(keys))
+	strValues := make([]string, len(values))
+	for i := range keys {
+		strKeys[i] = string(keys[i])
+		strValues[i] = string(values[i])
+	}
+
+	return strKeys, strValues, nil
+}

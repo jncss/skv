@@ -43,12 +43,17 @@ type WALEntry struct {
 type WAL struct {
 	file     *os.File
 	filePath string
+	logger   Logger
 	mu       sync.Mutex
 	enabled  bool
 }
 
 // OpenWAL opens or creates a WAL file
-func OpenWAL(path string) (*WAL, error) {
+func OpenWAL(path string, logger Logger) (*WAL, error) {
+	if logger == nil {
+		logger = NullLogger()
+	}
+
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -64,6 +69,7 @@ func OpenWAL(path string) (*WAL, error) {
 	wal := &WAL{
 		file:     file,
 		filePath: path,
+		logger:   logger,
 		enabled:  true,
 	}
 
@@ -167,11 +173,17 @@ func (w *WAL) LogCommit() error {
 		return nil
 	}
 
-	return w.logEntry(&WALEntry{
+	err := w.logEntry(&WALEntry{
 		OpType: WALOpCommit,
 		Key:    nil,
 		Data:   nil,
 	})
+
+	if err == nil {
+		w.logger.Debug("WAL commit logged")
+	}
+
+	return err
 }
 
 // logEntry writes a single entry to the WAL
@@ -248,6 +260,7 @@ func (w *WAL) Recover() ([]*WALEntry, error) {
 	}
 
 	var entries []*WALEntry
+	var corruptedEntries int
 
 	for {
 		entry, err := w.readEntry()
@@ -257,6 +270,11 @@ func (w *WAL) Recover() ([]*WALEntry, error) {
 			}
 			// If we encounter a corrupted entry, stop recovery at this point
 			// This allows partial recovery up to the last valid entry
+			corruptedEntries++
+			w.logger.Warn("WAL recovery stopped at corrupted entry",
+				Field{Key: "error", Value: err.Error()},
+				Field{Key: "recovered_entries", Value: len(entries)},
+			)
 			break
 		}
 
@@ -266,6 +284,13 @@ func (w *WAL) Recover() ([]*WALEntry, error) {
 		if entry.OpType == WALOpCommit {
 			break
 		}
+	}
+
+	if len(entries) > 0 {
+		w.logger.Info("WAL recovery completed",
+			Field{Key: "recovered_entries", Value: len(entries)},
+			Field{Key: "corrupted_entries", Value: corruptedEntries},
+		)
 	}
 
 	return entries, nil
@@ -349,6 +374,9 @@ func (w *WAL) Truncate() error {
 
 	// Truncate to just the header
 	if err := w.file.Truncate(WALHeaderSize); err != nil {
+		w.logger.Error("WAL truncate failed",
+			Field{Key: "error", Value: err.Error()},
+		)
 		return fmt.Errorf("failed to truncate WAL: %w", err)
 	}
 
@@ -357,6 +385,7 @@ func (w *WAL) Truncate() error {
 		return fmt.Errorf("failed to seek WAL: %w", err)
 	}
 
+	w.logger.Debug("WAL truncated")
 	return w.file.Sync()
 }
 

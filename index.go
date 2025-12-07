@@ -177,6 +177,11 @@ func (s *SKV) HasIndexString(indexName string, secondaryKey string) bool {
 	return s.HasIndex(indexName, []byte(secondaryKey))
 }
 
+// GetAllByIndexString is a convenience wrapper for GetAllByIndex using string keys
+func (s *SKV) GetAllByIndexString(indexName string, secondaryKey string) ([][]byte, error) {
+	return s.GetAllByIndex(indexName, []byte(secondaryKey))
+}
+
 // ListIndexes returns the names of all created indexes
 func (s *SKV) ListIndexes() []string {
 	s.mu.RLock()

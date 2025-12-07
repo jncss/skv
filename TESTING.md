@@ -113,6 +113,43 @@ This document describes the organization of test files in the SKV project.
 - Position checks (IsFirst, IsLast, IsValid)
 - Edge cases (empty database, closed cursors)
 
+### `logger_test.go` (275 lines)
+**Structured logging**
+- NullLogger (zero overhead, no output)
+- TextLogger (human-readable format)
+- JSONLogger (structured JSON output)
+- Log levels (Debug, Info, Warn, Error)
+- Field-based logging with key-value pairs
+- Logger integration with all operations
+- Custom logger implementations
+
+### `stream_rollback_test.go` (316 lines)
+**Stream operation rollback protection**
+- PutStream rollback on write errors
+- UpdateStream rollback preserving original value
+- Database integrity after failed stream operations
+- File size verification after rollback
+- Checkpoint-based error recovery
+- errorReader test helper for simulating failures
+
+### `rlock_test.go` (202 lines)
+**Concurrent read optimization**
+- Benchmarks for concurrent reads vs sequential
+- RLock performance for Keys(), Exists(), Count()
+- Concurrent safety validation
+- Race condition prevention tests
+- Mixed read/write concurrent operations
+
+### `string_convenience_test.go` (350 lines)
+**String convenience functions for cursors and indexes**
+- Cursor creation with strings: NewCursorString, PrefixCursorString, AllCursorString
+- Index cursor creation: NewIndexCursorString, PrefixIndexCursorString, AllIndexCursorString
+- String navigation: NextString, KeyString, ValueString, SeekString
+- String utilities: HasPrefixString, KeysString, CollectString
+- Index operations: GetByIndexString, GetAllByIndexString, HasIndexString
+- Reverse iteration validation
+- Category-based index testing
+
 ## Running Tests
 
 ```bash
@@ -148,14 +185,14 @@ go test -list=Fuzz
 
 ## Test Statistics
 
-- **Total tests**: 203 (196 regular + 7 fuzz functions)
-- **Test coverage**: 82.4%
-- **Total lines**: 7,803
-- **Test files**: 12
+- **Total tests**: 220 (213 regular + 7 fuzz functions)
+- **Test coverage**: 79.1%
+- **Total lines**: ~8,850
+- **Test files**: 16
 
 ## Test Categories
 
-### Functional Tests (121 tests)
+### Functional Tests (138 tests)
 - Basic operations
 - Advanced features
 - Data integrity
@@ -164,6 +201,10 @@ go test -list=Fuzz
 - Memory optimization
 - Secondary indexes
 - Cursors for ordered iteration
+- Structured logging
+- Stream rollback protection
+- Concurrent read optimization
+- String convenience functions for cursors and indexes
 
 ### Fuzzing Tests (7 functions)
 - Random input generation
@@ -190,14 +231,18 @@ Originally, tests were split across 11 files:
 - `stress_test.go`, `freespace_test.go`, `header_test.go`, `close_test.go`
 - `backup_test.go`, `verify_stats_test.go`, `coverage_test.go`
 
-Reorganized into 12 logically grouped files for better maintainability:
+Reorganized into 16 logically grouped files for better maintainability:
 - Core tests remain in `skv_test.go`
 - Advanced features consolidated into `advanced_test.go`
 - Integrity checks merged into `integrity_test.go`
 - Lifecycle operations combined into `lifecycle_test.go`
 - Specialized tests kept separate: `stress_test.go`, `concurrent_test.go`, `errors_test.go`
-- Context support added in `context_test.go` (new)
-- Memory optimization tests in `readrecord_optimization_test.go` (new)
-- Fuzzing tests in `fuzz_test.go` (new)
-- Secondary indexes in `index_test.go` (new)
-- Cursors in `cursor_test.go` (new)
+- Context support added in `context_test.go`
+- Memory optimization tests in `readrecord_optimization_test.go`
+- Fuzzing tests in `fuzz_test.go`
+- Secondary indexes in `index_test.go`
+- Cursors in `cursor_test.go`
+- Structured logging in `logger_test.go` (new)
+- Stream rollback protection in `stream_rollback_test.go` (new)
+- Concurrent read optimization in `rlock_test.go` (new)
+- String convenience functions in `string_convenience_test.go` (new)

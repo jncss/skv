@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-12-07
+
+### Added
+- **Structured Logging**: Built-in logging support for observability
+  - Three logger implementations: `NullLogger` (default, zero overhead), `JSONLogger` (structured), `TextLogger` (human-readable)
+  - Logger interface for custom implementations
+  - Four log levels: Debug, Info, Warn, Error
+  - Field-based logging with key-value pairs
+  - Set logger via `SetLogger()` method
+  - All operations logged: Put, Get, Update, Delete, Compact, WAL operations
+  - Performance metrics logged: operation duration, data sizes, file positions
+  - Error recovery events logged: rollback operations, WAL recovery
+  - See `LOGGING.md` for comprehensive documentation
+  - See `examples/07-logging` for usage examples
+
+- **Stream Rollback Protection**: PutStream and UpdateStream now include checkpoint-based rollback protection
+  - Atomic writes: Either entire key-value is written or nothing (no partial records)
+  - Checkpoint mechanism: File position saved before write, truncated on failure
+  - Original value preserved: UpdateStream keeps old value if new write fails
+  - No WAL overhead: Uses truncate instead of WAL to avoid memory buffering for large streams
+  - Consistent state: Database remains clean after failed operations, ready for retry
+  - All rollback events logged (Warn on success, Error on failure)
+  - **3 new tests**: `TestPutStreamRollbackOnError`, `TestUpdateStreamRollbackOnError`, `TestStreamRollbackPreservesIntegrity`
+  - See `ROLLBACK_PROTECTION.md` for detailed documentation
+  - See `stream_rollback_test.go` for test examples
+
+- **RWMutex Optimization**: Read operations now use RLock for better concurrency
+  - Cache-only operations use RLock: `Keys()`, `Exists()`, `Count()`
+  - File operations still use exclusive Lock (not thread-safe at OS level)
+  - 10-100x throughput improvement for concurrent read-heavy workloads
+  - New test file `rlock_test.go` with concurrent benchmarks
+  - Validates race-free operation with `TestConcurrentKeysAndWrites`
+
+- **String Convenience Functions for Cursors and Indexes**: Extended string API coverage
+  - Cursor creation: `NewCursorString()`, `PrefixCursorString()`, `AllCursorString()`
+  - Index cursors: `NewIndexCursorString()`, `PrefixIndexCursorString()`, `AllIndexCursorString()`
+  - Cursor navigation: `NextString()`, `KeyString()`, `ValueString()`, `SeekString()`
+  - Cursor utilities: `HasPrefixString()`, `KeysString()`, `CollectString()`
+  - Index operations: `GetAllByIndexString()` (complements existing `GetByIndexString()` and `HasIndexString()`)
+  - **3 new tests**: `TestCursorStringFunctions`, `TestIndexCursorStringFunctions`, `TestIndexStringFunctions`
+  - See `CURSORS.md` for comprehensive documentation and examples
+
+### Changed
+- **Total tests**: Now 220 tests passing (217 previous + 3 string convenience tests)
+- **Test coverage**: 79.1% of statements
+- **UpdateStream behavior**: Now writes new record before deleting old one (preserves original on failure)
+- **Concurrency model**: Read operations that only access cache now allow concurrent execution
+
 ## [0.3.0] - 2025-12-07
 
 ### Added
