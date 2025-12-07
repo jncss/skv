@@ -17,9 +17,12 @@ import (
 
 // WAL operation types
 const (
-	WALOpPut    byte = 0x01 // Put operation
-	WALOpDelete byte = 0x02 // Delete operation
-	WALOpCommit byte = 0x03 // Commit marker (checkpoint)
+	WALOpPut        byte = 0x01 // Put operation
+	WALOpDelete     byte = 0x02 // Delete operation
+	WALOpCommit     byte = 0x03 // Commit marker (checkpoint)
+	WALOpBeginTx    byte = 0x04 // Begin transaction
+	WALOpCommitTx   byte = 0x05 // Commit transaction
+	WALOpRollbackTx byte = 0x06 // Rollback transaction
 )
 
 // WAL file format:
@@ -181,6 +184,78 @@ func (w *WAL) LogCommit() error {
 
 	if err == nil {
 		w.logger.Debug("WAL commit logged")
+	}
+
+	return err
+}
+
+// LogBeginTx logs the start of a transaction
+func (w *WAL) LogBeginTx(txID uint64) error {
+	if !w.enabled {
+		return nil
+	}
+
+	// Encode transaction ID as 8 bytes
+	txIDBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(txIDBytes, txID)
+
+	err := w.logEntry(&WALEntry{
+		OpType: WALOpBeginTx,
+		Key:    txIDBytes,
+		Data:   nil,
+	})
+
+	if err == nil {
+		w.logger.Debug("WAL transaction begin logged",
+			Field{Key: "tx_id", Value: txID})
+	}
+
+	return err
+}
+
+// LogCommitTx logs the commit of a transaction
+func (w *WAL) LogCommitTx(txID uint64) error {
+	if !w.enabled {
+		return nil
+	}
+
+	// Encode transaction ID as 8 bytes
+	txIDBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(txIDBytes, txID)
+
+	err := w.logEntry(&WALEntry{
+		OpType: WALOpCommitTx,
+		Key:    txIDBytes,
+		Data:   nil,
+	})
+
+	if err == nil {
+		w.logger.Debug("WAL transaction commit logged",
+			Field{Key: "tx_id", Value: txID})
+	}
+
+	return err
+}
+
+// LogRollbackTx logs the rollback of a transaction
+func (w *WAL) LogRollbackTx(txID uint64) error {
+	if !w.enabled {
+		return nil
+	}
+
+	// Encode transaction ID as 8 bytes
+	txIDBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(txIDBytes, txID)
+
+	err := w.logEntry(&WALEntry{
+		OpType: WALOpRollbackTx,
+		Key:    txIDBytes,
+		Data:   nil,
+	})
+
+	if err == nil {
+		w.logger.Debug("WAL transaction rollback logged",
+			Field{Key: "tx_id", Value: txID})
 	}
 
 	return err

@@ -264,6 +264,7 @@ type SKV struct {
 	wal             *WAL              // Write-ahead log for durability
 	compressionType CompressionType   // Compression algorithm to use for new records
 	logger          Logger            // Logger for structured logging
+	txCounter       uint64            // Transaction counter for generating unique transaction IDs
 	mu              sync.RWMutex      // Mutex for thread-safe operations
 }
 
@@ -446,22 +447,87 @@ func (s *SKV) recoverFromWAL() error {
 	s.wal.Disable()
 	defer s.wal.Enable()
 
+	// Track active transactions: txID -> list of operations
+	activeTxs := make(map[uint64][]WALEntry)
+	var currentTxID uint64 = 0
+
 	// Replay operations
 	for _, entry := range entries {
 		switch entry.OpType {
-		case WALOpPut:
-			// Use putInternal - ignore ErrKeyExists since the operation may have
-			// already been applied before the crash (idempotent recovery)
-			if err := s.putInternal(entry.Key, entry.Data); err != nil && err != ErrKeyExists {
-				return fmt.Errorf("error replaying put from WAL: %w", err)
+		case WALOpBeginTx:
+			// Start a new transaction
+			if len(entry.Key) == 8 {
+				txID := binary.BigEndian.Uint64(entry.Key)
+				activeTxs[txID] = make([]WALEntry, 0)
+				currentTxID = txID
+				if s.logger != nil {
+					s.logger.Debug("WAL recovery: transaction begin",
+						Field{Key: "tx_id", Value: txID})
+				}
 			}
-		case WALOpDelete:
-			if err := s.deleteInternal(entry.Key); err != nil && err != ErrKeyNotFound {
-				return fmt.Errorf("error replaying delete from WAL: %w", err)
+
+		case WALOpCommitTx:
+			// Commit a transaction - apply all its operations
+			if len(entry.Key) == 8 {
+				txID := binary.BigEndian.Uint64(entry.Key)
+				if ops, exists := activeTxs[txID]; exists {
+					// Apply all operations in the transaction
+					for _, op := range ops {
+						if err := s.applyWALOperation(op); err != nil {
+							if s.logger != nil {
+								s.logger.Warn("WAL recovery: error applying transaction operation",
+									Field{Key: "tx_id", Value: txID},
+									Field{Key: "error", Value: err.Error()})
+							}
+						}
+					}
+					delete(activeTxs, txID)
+					if s.logger != nil {
+						s.logger.Debug("WAL recovery: transaction committed",
+							Field{Key: "tx_id", Value: txID},
+							Field{Key: "operations", Value: len(ops)})
+					}
+				}
+				currentTxID = 0
 			}
+
+		case WALOpRollbackTx:
+			// Rollback a transaction - discard all its operations
+			if len(entry.Key) == 8 {
+				txID := binary.BigEndian.Uint64(entry.Key)
+				delete(activeTxs, txID)
+				currentTxID = 0
+				if s.logger != nil {
+					s.logger.Debug("WAL recovery: transaction rolled back",
+						Field{Key: "tx_id", Value: txID})
+				}
+			}
+
+		case WALOpPut, WALOpDelete:
+			if currentTxID != 0 {
+				// Operation is part of a transaction - buffer it
+				activeTxs[currentTxID] = append(activeTxs[currentTxID], *entry)
+			} else {
+				// Standalone operation - apply immediately
+				if err := s.applyWALOperation(*entry); err != nil {
+					if s.logger != nil {
+						s.logger.Warn("WAL recovery: error applying standalone operation",
+							Field{Key: "error", Value: err.Error()})
+					}
+				}
+			}
+
 		case WALOpCommit:
-			// Commit marker - stop here
+			// Old-style commit marker - stop here
 			break
+		}
+	}
+
+	// Any transactions that were not committed or rolled back are discarded
+	if len(activeTxs) > 0 {
+		if s.logger != nil {
+			s.logger.Warn("WAL recovery: discarding incomplete transactions",
+				Field{Key: "count", Value: len(activeTxs)})
 		}
 	}
 
@@ -470,6 +536,23 @@ func (s *SKV) recoverFromWAL() error {
 		return fmt.Errorf("error truncating WAL after recovery: %w", err)
 	}
 
+	return nil
+}
+
+// applyWALOperation applies a single WAL operation during recovery
+func (s *SKV) applyWALOperation(entry WALEntry) error {
+	switch entry.OpType {
+	case WALOpPut:
+		// Use putInternal - ignore ErrKeyExists since the operation may have
+		// already been applied before the crash (idempotent recovery)
+		if err := s.putInternal(entry.Key, entry.Data); err != nil && err != ErrKeyExists {
+			return fmt.Errorf("error replaying put from WAL: %w", err)
+		}
+	case WALOpDelete:
+		if err := s.deleteInternal(entry.Key); err != nil && err != ErrKeyNotFound {
+			return fmt.Errorf("error replaying delete from WAL: %w", err)
+		}
+	}
 	return nil
 }
 

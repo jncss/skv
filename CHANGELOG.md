@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Atomic Transactions**: Full ACID transaction support with all-or-nothing guarantees
+  - Transaction API: `Begin()`, `Commit()`, `Rollback()`
+  - Mixed operations: `Put()`, `Update()`, `Delete()` within transactions
+  - String convenience: `PutString()`, `UpdateString()`, `DeleteString()`
+  - Validation: Keys checked before any writes (fast failure)
+  - Isolation: Changes buffered until commit (not visible to other operations)
+  - Durability: WAL logging with BeginTx, CommitTx, RollbackTx markers
+  - Recovery: Automatic replay of committed transactions, discarding incomplete ones
+  - Error handling: Automatic rollback on validation or write errors
+  - Transaction state: `Len()`, `ID()`, `IsCommitted()`, `IsRolledBack()`
+  - **15 new tests**: All transaction scenarios covered (basic, rollback, validation, recovery, large data, sequential)
+  - See `TRANSACTIONS.md` for comprehensive documentation and examples
+  - See `transaction_test.go` for test examples
+
+### Changed
+- **WAL operation types**: Added transaction markers (BeginTx, CommitTx, RollbackTx)
+- **WAL recovery**: Enhanced to handle transactions (buffer operations, apply on commit, discard on rollback/incomplete)
+- **Test count**: 228 tests (up from 220, +15 transaction tests)
+- **Coverage**: 80.6% (improved from 80.5%)
+
 ## [0.4.0] - 2025-12-07
 
 ### Added

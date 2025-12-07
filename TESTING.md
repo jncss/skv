@@ -150,6 +150,20 @@ This document describes the organization of test files in the SKV project.
 - Reverse iteration validation
 - Category-based index testing
 
+### `transaction_test.go` (690+ lines)
+**Atomic transactions with ACID guarantees**
+- Basic transaction operations (Put, Update, Delete)
+- Transaction commit and rollback
+- Validation rules (Put requires non-existing key, Update/Delete require existing key)
+- Mixed operations within single transaction
+- Empty transaction handling
+- Double commit/rollback prevention
+- Commit after rollback prevention
+- Transaction recovery after crash (committed, incomplete, rolled back)
+- Large data in transactions (1MB records)
+- Sequential transactions (100+ transactions)
+- Transaction state queries (Len, ID, IsCommitted, IsRolledBack)
+
 ## Running Tests
 
 ```bash
@@ -185,14 +199,14 @@ go test -list=Fuzz
 
 ## Test Statistics
 
-- **Total tests**: 220 (213 regular + 7 fuzz functions)
-- **Test coverage**: 80.5%
-- **Total lines**: ~8,850
-- **Test files**: 16
+- **Total tests**: 228 (221 regular + 7 fuzz functions)
+- **Test coverage**: 80.6%
+- **Total lines**: ~9,500+
+- **Test files**: 17
 
 ## Test Categories
 
-### Functional Tests (138 tests)
+### Functional Tests (153 tests)
 - Basic operations
 - Advanced features
 - Data integrity
@@ -205,6 +219,7 @@ go test -list=Fuzz
 - Stream rollback protection
 - Concurrent read optimization
 - String convenience functions for cursors and indexes
+- Atomic transactions (ACID guarantees)
 
 ### Fuzzing Tests (7 functions)
 - Random input generation
@@ -231,7 +246,7 @@ Originally, tests were split across 11 files:
 - `stress_test.go`, `freespace_test.go`, `header_test.go`, `close_test.go`
 - `backup_test.go`, `verify_stats_test.go`, `coverage_test.go`
 
-Reorganized into 16 logically grouped files for better maintainability:
+Reorganized into 17 logically grouped files for better maintainability:
 - Core tests remain in `skv_test.go`
 - Advanced features consolidated into `advanced_test.go`
 - Integrity checks merged into `integrity_test.go`
@@ -246,3 +261,4 @@ Reorganized into 16 logically grouped files for better maintainability:
 - Stream rollback protection in `stream_rollback_test.go` (new)
 - Concurrent read optimization in `rlock_test.go` (new)
 - String convenience functions in `string_convenience_test.go` (new)
+- Atomic transactions in `transaction_test.go` (new)

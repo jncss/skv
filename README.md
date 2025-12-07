@@ -3,8 +3,8 @@
 A Go library for storing key/value data in a sequential binary file format.
 
 [![Production Ready](https://img.shields.io/badge/production-ready-green.svg)](https://github.com/jncss/skv)
-[![Test Coverage](https://img.shields.io/badge/coverage-80.5%25-green.svg)](https://github.com/jncss/skv)
-[![Tests Passing](https://img.shields.io/badge/tests-220%20passing-brightgreen.svg)](https://github.com/jncss/skv)
+[![Test Coverage](https://img.shields.io/badge/coverage-80.6%25-green.svg)](https://github.com/jncss/skv)
+[![Tests Passing](https://img.shields.io/badge/tests-228%20passing-brightgreen.svg)](https://github.com/jncss/skv)
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
 **Performance Metrics:**
@@ -18,12 +18,13 @@ A Go library for storing key/value data in a sequential binary file format.
 - 📊 **WAL overhead** - ~73% slower writes, 0% impact on reads
 - 🧵 **1,900 ops/sec** - Concurrent operations (10 goroutines, race-free)
 - 📦 **37% reduction** - Average compaction savings
-- ✅ **220 tests** - All passing (comprehensive coverage including streaming, safety, context, indexes, cursors, WAL, rollback protection, and string convenience functions)
+- ✅ **228 tests** - All passing (comprehensive coverage including streaming, safety, context, indexes, cursors, WAL, rollback protection, string convenience functions, and atomic transactions)
 - 💾 **O(1) memory** - Streaming operations with constant memory usage regardless of file size
 
 ## Features
 
-- **Write-Ahead Log (WAL)** - Crash recovery with automatic operation replay for guaranteed durability
+- **Atomic Transactions** - ACID guarantees with Begin/Commit/Rollback for multi-operation atomicity (all-or-nothing)
+- **Write-Ahead Log (WAL)** - Crash recovery with automatic operation replay for guaranteed durability and transaction recovery
 - **Structured Logging** - Built-in logging support with JSONLogger, TextLogger, and custom loggers for observability
 - **Compression** - Transparent LZ4/Snappy compression for reduced storage (optional, configurable per database)
 - **Sequential file format** - All writes are append-only for simplicity and reliability
@@ -216,6 +217,14 @@ func main() {
         fmt.Printf("%s: %s\n", key, value)
         return nil
     })
+
+    // Atomic transactions
+    tx := db.Begin()
+    tx.PutString("account:alice", "1000.00")
+    tx.PutString("account:bob", "500.00")
+    if err := tx.Commit(); err != nil {
+        log.Fatal(err) // All operations or none
+    }
 
     // Get statistics
     fmt.Printf("Total keys: %d\n", db.Count())

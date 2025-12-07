@@ -1,4 +1,1 @@
-- **Transaccions atòmiques**: Afegir suport per a operacions batch atòmiques (tot o res).
-
-
-
+- IA Assisted cli tool
