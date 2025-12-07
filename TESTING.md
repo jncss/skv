@@ -67,6 +67,52 @@ This document describes the organization of test files in the SKV project.
 - Edge cases for all major operations
 - Type calculation coverage
 
+### `context_test.go` (400 lines)
+**Context-aware operations**
+- Context cancellation during Put, Get, Update, Delete operations
+- Timeout handling (PutCtx, GetCtx, UpdateCtx, DeleteCtx)
+- Compaction cancellation (CompactCtx)
+- Context propagation and error handling
+- Integration with long-running operations
+- Proper cleanup on cancellation
+
+### `readrecord_optimization_test.go` (215 lines)
+**Memory optimization for readRecord**
+- Streaming CRC verification without loading data into memory
+- Tests for small, medium, large, and very large values (up to 5MB)
+- Verification that deleted records skip CRC efficiently
+- Corruption detection with streaming CRC
+- Performance validation for cache loading and delete operations
+
+### `fuzz_test.go` (335 lines)
+**Fuzzing tests for robustness**
+- FuzzPutGet: Random key/value combinations
+- FuzzUpdate: Random update sequences
+- FuzzDelete: Random deletion patterns
+- FuzzMultipleOperations: Random operation sequences
+- FuzzReopenPersistence: Random data persistence validation
+- FuzzCompaction: Random compaction scenarios
+- FuzzBinaryKeys: Binary keys with special characters (including 0x00, 0xFF, 0x80)
+
+### `index_test.go` (560 lines)
+**Secondary indexes**
+- Index creation and management
+- Lookups by secondary keys
+- Automatic index updates on Put/Update/Delete
+- Index persistence (save/load to JSON)
+- Index rebuilding
+- Binary data indexing
+
+### `cursor_test.go` (682 lines)
+**Cursors for ordered iteration**
+- Primary key cursors (all records, prefix, range)
+- Secondary index cursors
+- Forward and reverse iteration
+- Cursor navigation (Next, Seek, Reset)
+- Utility methods (ForEach, Collect, Keys, Count)
+- Position checks (IsFirst, IsLast, IsValid)
+- Edge cases (empty database, closed cursors)
+
 ## Running Tests
 
 ```bash
@@ -87,22 +133,44 @@ go test -run TestStress
 
 # Run tests with race detector
 go test -race
+
+# Run fuzzing tests (indefinitely until failure)
+go test -fuzz=FuzzPutGet
+
+# Run fuzzing for specific duration
+go test -fuzz=FuzzPutGet -fuzztime=30s
+go test -fuzz=FuzzBinaryKeys -fuzztime=1m
+go test -fuzz=FuzzCompaction -fuzztime=10s
+
+# List all fuzz tests
+go test -list=Fuzz
 ```
 
 ## Test Statistics
 
-- **Total tests**: 102
-- **Test coverage**: 81.8%
-- **Total lines**: 4,238
-- **Average test file size**: ~605 lines
+- **Total tests**: 203 (196 regular + 7 fuzz functions)
+- **Test coverage**: 82.4%
+- **Total lines**: 7,803
+- **Test files**: 12
 
 ## Test Categories
 
-### Functional Tests (76 tests)
+### Functional Tests (121 tests)
 - Basic operations
 - Advanced features
 - Data integrity
 - Lifecycle management
+- Context-aware operations
+- Memory optimization
+- Secondary indexes
+- Cursors for ordered iteration
+
+### Fuzzing Tests (7 functions)
+- Random input generation
+- Edge case discovery
+- Binary data handling
+- Persistence validation
+- Compaction robustness
 
 ### Stress Tests (15 tests)
 - Large datasets (10,000+ records)
@@ -122,9 +190,14 @@ Originally, tests were split across 11 files:
 - `stress_test.go`, `freespace_test.go`, `header_test.go`, `close_test.go`
 - `backup_test.go`, `verify_stats_test.go`, `coverage_test.go`
 
-Reorganized into 7 logically grouped files for better maintainability:
+Reorganized into 12 logically grouped files for better maintainability:
 - Core tests remain in `skv_test.go`
 - Advanced features consolidated into `advanced_test.go`
 - Integrity checks merged into `integrity_test.go`
 - Lifecycle operations combined into `lifecycle_test.go`
 - Specialized tests kept separate: `stress_test.go`, `concurrent_test.go`, `errors_test.go`
+- Context support added in `context_test.go` (new)
+- Memory optimization tests in `readrecord_optimization_test.go` (new)
+- Fuzzing tests in `fuzz_test.go` (new)
+- Secondary indexes in `index_test.go` (new)
+- Cursors in `cursor_test.go` (new)

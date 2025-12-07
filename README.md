@@ -1,10 +1,10 @@
-# SKV - Simple Key Value
+# SKV - Solid Key Value
 
 A Go library for storing key/value data in a sequential binary file format.
 
 [![Production Ready](https://img.shields.io/badge/production-ready-green.svg)](https://github.com/jncss/skv)
-[![Test Coverage](https://img.shields.io/badge/coverage-81.8%25-green.svg)](https://github.com/jncss/skv)
-[![Tests Passing](https://img.shields.io/badge/tests-142%20passing-brightgreen.svg)](https://github.com/jncss/skv)
+[![Test Coverage](https://img.shields.io/badge/coverage-82.4%25-green.svg)](https://github.com/jncss/skv)
+[![Tests Passing](https://img.shields.io/badge/tests-196%20passing-brightgreen.svg)](https://github.com/jncss/skv)
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
 **Performance Metrics:**
@@ -13,7 +13,8 @@ A Go library for storing key/value data in a sequential binary file format.
 - 🔄 **365 updates/sec** - With automatic space reuse
 - 🧵 **1,900 ops/sec** - Concurrent operations (10 goroutines, race-free)
 - 📦 **37% reduction** - Average compaction savings
-- ✅ **142 tests** - All passing (comprehensive coverage including streaming and safety)
+- ✅ **196 tests** - All passing (comprehensive coverage including streaming, safety, context, indexes, and cursors)
+- 💾 **O(1) memory** - Streaming operations with constant memory usage regardless of file size
 
 ## Features
 
@@ -25,7 +26,10 @@ A Go library for storing key/value data in a sequential binary file format.
 - **Thread-safe** - All operations are protected with mutex locks for safe concurrent access within a single process
 - **Production-ready** - Stress tested with 10,000+ records and concurrent operations
 - **Backup/Restore** - JSON-based backups with smart encoding (text/base64) for portability
-- **Streaming operations** - Memory-efficient PutStream/GetStream for large values (no full memory load)
+- **Streaming operations** - Memory-efficient PutStream/GetStream for large values with incremental CRC calculation
+- **Context support** - Context-aware operations (PutCtx, GetCtx, UpdateCtx, DeleteCtx, CompactCtx) for timeouts and cancellation
+- **Secondary indexes** - Fast lookups by alternative keys with automatic index maintenance
+- **Cursors** - Ordered iteration with range queries, prefix matching, and bidirectional traversal for both primary and secondary keys
 - **Cross-platform** - Works on Linux, macOS, BSD, and Windows
 - **String convenience functions** - Direct string operations without byte conversion
 - **Batch operations** - Efficiently insert or retrieve multiple keys at once
@@ -304,6 +308,97 @@ Marks a key as deleted by setting bit 7 of the type field on the last occurrence
 err := db.Delete([]byte("name"))
 ```
 
+### Context-Aware Operations
+
+All primary operations support context for timeout and cancellation control. This is essential for production applications that need fine-grained control over long-running operations.
+
+#### `PutCtx(ctx context.Context, key []byte, data []byte) error`
+Stores a new key-value pair with context support. Returns `ctx.Err()` if the context is cancelled or times out.
+
+**Example:**
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+err := db.PutCtx(ctx, []byte("key"), []byte("value"))
+if err == context.DeadlineExceeded {
+    fmt.Println("Operation timed out")
+} else if err == context.Canceled {
+    fmt.Println("Operation was cancelled")
+}
+```
+
+#### `GetCtx(ctx context.Context, key []byte) ([]byte, error)`
+Retrieves a value with context support.
+
+**Example:**
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+// Cancel from another goroutine if needed
+go func() {
+    time.Sleep(100 * time.Millisecond)
+    cancel()
+}()
+
+value, err := db.GetCtx(ctx, []byte("key"))
+if err == context.Canceled {
+    fmt.Println("Read was cancelled")
+}
+```
+
+#### `UpdateCtx(ctx context.Context, key []byte, data []byte) error`
+Updates an existing key with context support.
+
+**Example:**
+```go
+ctx := context.Background()
+err := db.UpdateCtx(ctx, []byte("key"), []byte("new_value"))
+```
+
+#### `DeleteCtx(ctx context.Context, key []byte) error`
+Deletes a key with context support.
+
+**Example:**
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+defer cancel()
+
+err := db.DeleteCtx(ctx, []byte("key"))
+```
+
+#### `CompactCtx(ctx context.Context) error`
+Compacts the database with context support. This is particularly useful for large databases where compaction might take significant time and you want the ability to cancel the operation.
+
+The context is checked periodically during compaction, allowing for responsive cancellation even when processing many records.
+
+**Example:**
+```go
+// Compact with a timeout
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+err := db.CompactCtx(ctx)
+if err == context.DeadlineExceeded {
+    fmt.Println("Compaction took too long, cancelled")
+    // Original database file remains intact
+}
+```
+
+**Context checking points:**
+- Before acquiring the lock
+- After acquiring the lock
+- Periodically during record processing (in CompactCtx)
+
+**Use cases:**
+- **HTTP servers**: Cancel operations when client disconnects
+- **Batch jobs**: Respect shutdown signals and timeouts
+- **Microservices**: Propagate cancellation across service boundaries
+- **Resource management**: Prevent runaway operations
+
+**Note:** The original functions (`Put`, `Get`, `Update`, `Delete`, `Compact`) remain available and internally call the context versions with `context.Background()` for backward compatibility.
+
 ### `Keys() ([][]byte, error)`
 Returns a list of all active keys in the database. Deleted keys and old versions of updated keys are excluded.
 
@@ -499,6 +594,22 @@ Store and retrieve files directly from the database:
 - `GetStream(key []byte, writer io.Writer) (int64, error)` - Stream value to a writer (memory-efficient)
 - `GetStreamString(key string, writer io.Writer) (int64, error)` - Stream value using string key
 
+**Memory Efficiency:**
+
+All streaming operations (PutStream, GetStream, UpdateStream) and internal operations (cache loading, deletion, compaction) use incremental CRC calculation with constant memory buffers (64KB), making them safe for files of any size:
+
+- **Small files** (≤255 bytes): Negligible difference between regular Put/Get and streaming
+- **Large files** (>1MB): Significant memory savings - uses only 64KB regardless of file size
+- **Very large files** (>1GB): Essential to use streaming - regular Put/Get would require loading entire file into memory
+
+The library automatically handles CRC verification incrementally during all operations:
+- **Writing**: `PutStream`, `UpdateStream`, and `writeRecordAtPosition` calculate CRC while streaming data
+- **Reading with data**: `GetStream` verifies CRC incrementally while streaming to output
+- **Reading metadata only**: Cache loading and delete operations use streaming CRC verification without loading data into memory
+- **Compaction**: Processes records one-at-a-time with streaming CRC, never loading all data in memory
+
+This ensures **O(1) constant memory usage** for databases of any size, ensuring data integrity without memory overhead.
+
 **Example:**
 ```go
 // Store a configuration file
@@ -606,6 +717,116 @@ if err != nil {
     db.Restore("before_migration.json")
 }
 ```
+
+## Cursors
+
+SKV provides a powerful cursor system for ordered iteration and range queries.
+
+### Basic Cursor Usage
+
+```go
+// Iterate all records in sorted order
+cursor := db.AllCursor(false) // false = forward, true = reverse
+defer cursor.Close()
+
+for {
+    key, value, err := cursor.Next()
+    if err == io.EOF {
+        break
+    }
+    // Process key/value
+}
+```
+
+### Range Queries
+
+```go
+// Query records from "user:100" to "user:199" (inclusive)
+cursor := db.NewCursor(&skv.CursorOptions{
+    From: []byte("user:100"),
+    To:   []byte("user:199"),
+})
+defer cursor.Close()
+
+for {
+    key, value, err := cursor.Next()
+    if err == io.EOF {
+        break
+    }
+    // Process key/value in range
+}
+```
+
+### Prefix Cursors
+
+```go
+// Find all keys starting with "config:"
+cursor := db.PrefixCursor([]byte("config:"), false)
+defer cursor.Close()
+
+for {
+    key, value, err := cursor.Next()
+    if err == io.EOF {
+        break
+    }
+    // Process matching keys
+}
+```
+
+### Index Cursors
+
+```go
+// First, create a secondary index
+db.CreateIndex("by_email", func(data []byte) []byte {
+    var user User
+    json.Unmarshal(data, &user)
+    return []byte(user.Email)
+})
+
+// Iterate records ordered by email
+cursor, _ := db.AllIndexCursor("by_email", false)
+defer cursor.Close()
+
+for {
+    key, value, err := cursor.Next()
+    if err == io.EOF {
+        break
+    }
+    // Records are ordered by indexed field
+}
+
+// Or use prefix on indexed field
+cursor, _ = db.PrefixIndexCursor("by_email", []byte("admin@"), false)
+```
+
+### Cursor Methods
+
+```go
+cursor := db.AllCursor(false)
+
+// Navigation
+cursor.Seek([]byte("start-here"))  // Jump to position
+cursor.Reset()                     // Go back to beginning
+
+// Utility methods
+count := cursor.Count()            // Total records in cursor
+keys := cursor.Keys()              // Get all keys
+
+// Iteration patterns
+cursor.ForEach(func(key, value []byte) bool {
+    // Process each record
+    return true // continue, false to stop
+})
+
+keys, values, _ := cursor.Collect() // Collect all into slices
+
+// Position checks
+if cursor.IsFirst() { /* ... */ }
+if cursor.IsLast()  { /* ... */ }
+if cursor.IsValid() { /* ... */ }
+```
+
+**For complete cursor documentation, see [CURSORS.md](CURSORS.md)**
 
 ## Error Handling
 

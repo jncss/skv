@@ -1,3 +1,24 @@
-Eina de 'cli' recuperació, cal afegir algun byte de marca de registre per facilitar un 'recover'?
-Multiples claus?
-Demanar opinió del projecte a altres IA's.
+## 2. **Gestió d'errors millorada**
+
+- **Transaccions atòmiques**: Afegir suport per a operacions batch atòmiques (tot o res).
+- **Recuperació d'errors**: Si `writeRecordStream` falla a mig camí, el fitxer pot quedar en estat inconsistent. Caldria rollback o un flag de "record incomplet".
+
+## 3. **Funcionalitats noves**
+
+- **Iteradors eficients**: `ForEach` carrega tot en memòria. Un iterador que vagi llegint sota demanda seria més eficient.
+- **Compactació automàtica**: Trigger automàtic quan `WastedPercent > X%`.
+- **Índexs secundaris**: Suport per a múltiples índexs/claus alternatives.
+- **Compressió**: Opció per comprimir dades grans (LZ4, Snappy).
+
+## 4. **Robustesa**
+
+- **Write-Ahead Log (WAL)**: Per garantir durabilitat en cas de crash.
+- **Checksums del fitxer complet**: Un checksum global per detectar corrupció.
+- **Locks a nivell de registre**: Ara és lock global, podria ser més granular per concurrència.
+
+## 5. **API/UX**
+
+- **Mètriques**: Exportar mètriques (operacions/s, latència, etc.).
+- **Logging estructurat**: Afegir logging opcional per debugging.
+
+
