@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2025-12-08
+
 ### Added
 - **Atomic Transactions**: Full ACID transaction support with all-or-nothing guarantees
   - Transaction API: `Begin()`, `Commit()`, `Rollback()`
@@ -21,12 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **15 new tests**: All transaction scenarios covered (basic, rollback, validation, recovery, large data, sequential)
   - See `TRANSACTIONS.md` for comprehensive documentation and examples
   - See `transaction_test.go` for test examples
+  - See `examples/08-transactions/` for complete working example
 
 ### Changed
 - **WAL operation types**: Added transaction markers (BeginTx, CommitTx, RollbackTx)
 - **WAL recovery**: Enhanced to handle transactions (buffer operations, apply on commit, discard on rollback/incomplete)
+  - Fixed old-style commit marker handling (properly stops processing at WALOpCommit)
 - **Test count**: 228 tests (up from 220, +15 transaction tests)
-- **Coverage**: 80.6% (improved from 80.5%)
+- **Coverage**: 80.8% (improved from 80.5%)
+
+### Removed
+- **Unused code**: Removed `compressWriter` type and `newCompressWriter()` function from compression.go (-35 lines)
 
 ## [0.4.0] - 2025-12-07
 
