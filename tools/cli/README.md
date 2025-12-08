@@ -46,6 +46,18 @@ skv [options] <command> [arguments]
   - Compression is transparent: reads work regardless of write compression settings
   - Example: `skv -c lz4 put mydb.skv key value`
 
+- `--encryption` or `-e <type>`: Set encryption algorithm for the database
+  - Values: `none` (default), `aes` (AES-256), `simplecipher` (custom XOR)
+  - Requires `--password` option when not `none`
+  - Both keys and values are encrypted separately
+  - Encryption is applied BEFORE compression
+  - Example: `skv -e aes -p mypassword put secure.skv key value`
+
+- `--password` or `-p <password>`: Encryption/decryption password
+  - Required when `--encryption` is not `none`
+  - Must be the same for all operations on the same database
+  - Example: `skv --encryption aes --password secret123 get secure.skv key`
+
 ## Commands
 
 ### Basic Operations
@@ -398,6 +410,90 @@ skv -c lz4 put logs.skv log:2024-12-07 "$(cat large_log.txt)"
 skv -c snappy put archive.skv data:20241207 "$(cat data.json)"
 
 # Compression is transparent - no flag needed for reading
+skv get logs.skv log:2024-12-07
+```
+
+### Example 7: Encryption
+
+The CLI supports AES-256 and SimpleCipher encryption for secure storage.
+
+```bash
+# Store data with AES encryption
+skv -e aes -p mySecretPassword put secure.skv api:key "sk_live_abc123..."
+skv -e aes -p mySecretPassword put secure.skv token "bearer_xyz..."
+
+# Store file with AES encryption
+skv --encryption aes --password mySecretPassword putfile secure.skv credentials creds.json
+
+# Retrieve encrypted data (must provide correct password)
+skv -e aes -p mySecretPassword get secure.skv api:key
+
+# Use SimpleCipher for custom encryption
+skv -e simplecipher -p secret123 put private.skv data "sensitive info"
+skv -e simplecipher -p secret123 get private.skv data
+
+# Combine compression and encryption
+skv -c lz4 -e aes -p pass123 put hybrid.skv large:data "$(cat big_file.txt)"
+
+# List keys (encrypted, requires password)
+skv -e aes -p mySecretPassword keys secure.skv
+
+# Iterate over encrypted data
+skv --encryption aes --password mySecretPassword foreach secure.skv
+
+# Backup encrypted database
+# IMPORTANT: Backup preserves encryption - data stays encrypted in JSON!
+skv -e aes -p mySecretPassword backup secure.skv backup.json
+# The backup.json contains ENCRYPTED data (secure even if stolen)
+
+# Restore encrypted backup (must use SAME password!)
+skv -e aes -p mySecretPassword restore secure.skv backup.json
+
+# To change encryption password, you need to:
+# 1. Backup with old password
+# 2. Create new database with new password  
+# 3. For each record: read from backup → write to new database
+```
+
+**Important Notes:**
+- Both keys and values are encrypted separately
+- Encryption is applied BEFORE compression (encrypt → compress on write, decompress → decrypt on read)
+- Password is required for all operations on encrypted databases
+- Wrong password will cause decryption errors
+- **Backup files preserve encryption** - data stays encrypted in JSON (secure!)
+- Must use the **same password** to restore that was used for backup
+- AES-256: More secure, industry standard
+- SimpleCipher: Custom XOR-based cipher, faster but less secure
+
+**Example 8: Encrypted Backup Security**
+```bash
+# Create encrypted database and backup
+skv -e aes -p secret123 put secure.skv key1 "sensitive data"
+skv -e aes -p secret123 backup secure.skv backup.json
+
+# The backup.json contains ENCRYPTED data:
+# {
+#   "key": "OQ_DJIsZ2TXU2tUcNb-NANk6ATE=",
+#   "value": "notqYE46bmB9po-cSPShhFR0VcvEqO9_..."
+# }
+# ☝️ Completely unreadable without password!
+
+# Restore with correct password - works!
+skv -e aes -p secret123 restore restored.skv backup.json
+skv -e aes -p secret123 get restored.skv key1
+# Output: sensitive data
+
+# Restore with wrong password - corrupts data!
+skv -e aes -p WRONG restore bad.skv backup.json
+skv -e aes -p WRONG get bad.skv key1
+# Output: garbage or error
+```
+
+**Example 9: Recovery with Encryption**
+```bash
+# Recover encrypted database (requires password)
+skv -e aes -p mySecretPassword recover corrupted_secure.skv repaired_secure.skv
+```
 skv get logs.skv log:2024-12-07
 
 # Recover compressed database

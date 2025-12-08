@@ -12,6 +12,8 @@ import (
 // Global flags
 var hexDump bool
 var compressionType string = "none"
+var encryptionType string = "none"
+var encryptionPassword string = ""
 
 // parseFlags parses global flags from args
 func parseFlags() []string {
@@ -26,6 +28,22 @@ func parseFlags() []string {
 				compressionType = os.Args[i]
 			} else {
 				fmt.Fprintln(os.Stderr, "Error: --compression requires an argument (none, snappy, lz4)")
+				os.Exit(1)
+			}
+		} else if arg == "--encryption" || arg == "-e" {
+			if i+1 < len(os.Args) {
+				i++ // Move to next arg
+				encryptionType = os.Args[i]
+			} else {
+				fmt.Fprintln(os.Stderr, "Error: --encryption requires an argument (none, aes, simplecipher)")
+				os.Exit(1)
+			}
+		} else if arg == "--password" || arg == "-p" {
+			if i+1 < len(os.Args) {
+				i++ // Move to next arg
+				encryptionPassword = os.Args[i]
+			} else {
+				fmt.Fprintln(os.Stderr, "Error: --password requires an argument")
 				os.Exit(1)
 			}
 		} else {
@@ -51,10 +69,36 @@ func getCompressionOption() skv.CompressionType {
 	}
 }
 
-// openDatabase opens a database with the configured compression
+// getEncryptionOption returns the encryption option based on the flag
+func getEncryptionOption() skv.EncryptionType {
+	switch encryptionType {
+	case "none":
+		return skv.EncryptionNone
+	case "aes":
+		return skv.EncryptionAES
+	case "simplecipher":
+		return skv.EncryptionSimpleCipher
+	default:
+		fmt.Fprintf(os.Stderr, "Invalid encryption type: %s (use none, aes, or simplecipher)\n", encryptionType)
+		os.Exit(1)
+		return skv.EncryptionNone
+	}
+}
+
+// openDatabase opens a database with the configured compression and encryption
 func openDatabase(path string) (*skv.SKV, error) {
+	encryption := getEncryptionOption()
+
+	// Validate password if encryption is enabled
+	if encryption != skv.EncryptionNone && encryptionPassword == "" {
+		fmt.Fprintln(os.Stderr, "Error: --password is required when using encryption")
+		os.Exit(1)
+	}
+
 	return skv.OpenWithOptions(path, &skv.Options{
-		Compression: getCompressionOption(),
+		Compression:        getCompressionOption(),
+		Encryption:         encryption,
+		EncryptionPassword: encryptionPassword,
 	})
 }
 

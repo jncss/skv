@@ -272,7 +272,7 @@ func TestReadRecordSeekError(t *testing.T) {
 	// Close file to cause seek errors
 	db.file.Close()
 
-	_, _, _, _, err = db.readRecord(false)
+	_, _, _, _, err = db.readRecord(false, false)
 	if err == nil {
 		t.Error("Expected error when reading from closed file")
 	}

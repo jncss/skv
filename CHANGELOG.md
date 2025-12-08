@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2025-12-08
+
+### Added
+- **Encryption System**: Optional encryption for keys and values with password-based authentication
+  - **AES Encryption**: Industry-standard AES-256 via EasyAES library (Base64 encoded)
+  - **SimpleCipher Encryption**: Custom XOR-based cipher via SimpleCipher library (Base64 encoded)
+  - **Separate Encryption**: Keys and values encrypted independently
+  - **Encryption Order**: Encrypt BEFORE compress (write), Decompress THEN decrypt (read)
+  - **Transparent Operations**: Automatic encryption/decryption on all Get/Put/Update/Delete operations
+  - **Secure Backups**: Backup/Restore preserves encrypted data without decryption (critical security feature)
+  - **CLI Integration**: `--encryption`/`-e` and `--password`/`-p` flags for encrypted databases
+  - **10 new tests**: Comprehensive encryption coverage (AES, SimpleCipher, compression, backup/restore, wrong password)
+  - See `ENCRYPTION.md` for comprehensive documentation
+  - See `encryption_test.go` and `backup_encryption_test.go` for test examples
+  - See `examples/12-encryption/` for complete working examples
+
+### Changed
+- **File version**: Updated to 0.6.0
+- **API**: Added optional `Encryption` and `EncryptionPassword` fields to `Options` struct
+- **Internal**: Modified `readRecord()` and `writeRecordAtPosition()` with `skipEncryption` parameter for secure backups
+- **CLI**: Enhanced with encryption support in all commands (put, get, update, delete, backup, restore)
+- **Test count**: 238 tests (up from 228, +10 encryption tests)
+- **Coverage**: 81.0% (improved from 80.8%)
+
+### Dependencies
+- **Added**: `github.com/jncss/easyaes` v0.0.0-20251208190620-9743bf4abb45 - AES-256 encryption
+- **Added**: `github.com/jncss/simplecipher` v1.0.0 - Custom XOR cipher
+
+### Fixed
+- **Backup security**: Backup now preserves encrypted data instead of decrypting (prevents sensitive data exposure in JSON)
+- **Restore cache indexing**: Fixed restore using encrypted keys for cache; now correctly decrypts keys before cache insertion
+
+### Documentation
+- **Added**: `ENCRYPTION.md` - Comprehensive encryption guide
+- **Updated**: `README.md` - Added encryption feature and updated version/test counts
+- **Updated**: `tools/cli/README.md` - Added encryption examples (Examples 7 & 8)
+- **Updated**: `tools/cli/EXAMPLES.md` - Added encryption usage examples
+- **Added**: `examples/12-encryption/` - Complete working encryption examples
+
 ## [0.5.1] - 2025-12-08
 
 ### Fixed

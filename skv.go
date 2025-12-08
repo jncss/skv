@@ -263,6 +263,7 @@ type SKV struct {
 	indexes         map[string]*Index // Secondary indexes
 	wal             *WAL              // Write-ahead log for durability
 	compressionType CompressionType   // Compression algorithm to use for new records
+	encryptor       encryptor         // Encryptor for encrypting keys and values
 	logger          Logger            // Logger for structured logging
 	txCounter       uint64            // Transaction counter for generating unique transaction IDs
 	mu              sync.RWMutex      // Mutex for thread-safe operations
@@ -275,6 +276,15 @@ type Options struct {
 	// Available: CompressionSnappy, CompressionLZ4
 	Compression CompressionType
 
+	// Encryption specifies the encryption algorithm to use for keys and values
+	// Default: EncryptionNone (no encryption)
+	// Available: EncryptionAES, EncryptionSimpleCipher
+	Encryption EncryptionType
+
+	// EncryptionPassword is the password used for encryption/decryption
+	// Required if Encryption is not EncryptionNone
+	EncryptionPassword string
+
 	// Logger specifies the logger to use for structured logging
 	// Default: NullLogger() (no logging, zero overhead)
 	// Available: NewJSONLogger(), NewTextLogger()
@@ -284,8 +294,10 @@ type Options struct {
 // DefaultOptions returns the default options for opening an SKV database
 func DefaultOptions() *Options {
 	return &Options{
-		Compression: CompressionNone,
-		Logger:      NullLogger(),
+		Compression:        CompressionNone,
+		Encryption:         EncryptionNone,
+		EncryptionPassword: "",
+		Logger:             NullLogger(),
 	}
 }
 
@@ -322,6 +334,14 @@ func OpenWithOptions(name string, opts *Options) (*SKV, error) {
 		return nil, fmt.Errorf("error opening WAL: %w", err)
 	}
 
+	// Create encryptor
+	enc, err := createEncryptor(opts.Encryption, opts.EncryptionPassword)
+	if err != nil {
+		file.Close()
+		wal.Close()
+		return nil, fmt.Errorf("error creating encryptor: %w", err)
+	}
+
 	skv := &SKV{
 		file:            file,
 		filePath:        name,
@@ -330,6 +350,7 @@ func OpenWithOptions(name string, opts *Options) (*SKV, error) {
 		indexes:         make(map[string]*Index),
 		wal:             wal,
 		compressionType: opts.Compression,
+		encryptor:       enc,
 		logger:          opts.Logger,
 	}
 
@@ -634,16 +655,42 @@ func (s *SKV) CloseWithCompact() error {
 // writeRecordAtPosition writes a complete record (type, key, data) at the current file position
 // Returns the position where the record was written
 // Uses streaming CRC calculation to avoid loading large records into memory
-func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, uint64, error) {
-	// Try to compress data if compression is enabled
-	originalSize := uint64(len(data))
-	compressedData, actualCompressionType, err := compress(data, s.compressionType)
+func (s *SKV) writeRecordAtPosition(key []byte, data []byte, skipEncryption bool) (int64, uint64, error) {
+	// Encrypt key and data BEFORE compression (if encryption is enabled and not skipped)
+	var encryptedKey, encryptedData []byte
+	var err error
+
+	if skipEncryption {
+		// Skip encryption - use data as-is (for backup/restore)
+		encryptedKey = key
+		encryptedData = data
+	} else {
+		// Normal path: encrypt if configured
+		encryptedKey, err = s.encryptor.encrypt(key)
+		if err != nil {
+			return 0, 0, fmt.Errorf("key encryption error: %w", err)
+		}
+
+		encryptedData, err = s.encryptor.encrypt(data)
+		if err != nil {
+			return 0, 0, fmt.Errorf("data encryption error: %w", err)
+		}
+	}
+
+	// Check encrypted key size doesn't exceed 255 bytes
+	if len(encryptedKey) > 255 {
+		return 0, 0, fmt.Errorf("encrypted key too long (max 255 bytes, got %d)", len(encryptedKey))
+	}
+
+	// Try to compress encrypted data if compression is enabled
+	originalSize := uint64(len(encryptedData))
+	compressedData, actualCompressionType, err := compress(encryptedData, s.compressionType)
 	if err != nil {
 		return 0, 0, fmt.Errorf("compression error: %w", err)
 	}
 
 	// Use compressed data if compression was applied
-	dataToWrite := data
+	dataToWrite := encryptedData
 	if actualCompressionType != CompressionNone {
 		dataToWrite = compressedData
 	}
@@ -706,15 +753,15 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, uint64, err
 		return 0, 0, fmt.Errorf("error writing type: %w", err)
 	}
 
-	// Write the key size
-	keySize := byte(len(key))
+	// Write the encrypted key size
+	keySize := byte(len(encryptedKey))
 	keySizeBuf := []byte{keySize}
 	if err := writeAndHash(keySizeBuf); err != nil {
 		return 0, 0, fmt.Errorf("error writing key size: %w", err)
 	}
 
-	// Write the key
-	if err := writeAndHash(key); err != nil {
+	// Write the encrypted key
+	if err := writeAndHash(encryptedKey); err != nil {
 		return 0, 0, fmt.Errorf("error writing key: %w", err)
 	}
 
@@ -794,8 +841,8 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, uint64, err
 		return 0, 0, fmt.Errorf("error syncing to disk: %w", err)
 	}
 
-	// Calculate actual record size written
-	actualRecordSize := calculateRecordSize(byte(len(key)), dataSize, recordType)
+	// Calculate actual record size written (using encrypted key size)
+	actualRecordSize := calculateRecordSize(byte(len(encryptedKey)), dataSize, recordType)
 
 	return recordPos, actualRecordSize, nil
 }
@@ -823,7 +870,7 @@ func (s *SKV) writeRecord(key []byte, data []byte) (int64, error) {
 		}
 
 		// Write the record and get actual size written
-		_, actualSize, err := s.writeRecordAtPosition(key, data)
+		_, actualSize, err := s.writeRecordAtPosition(key, data, false)
 		if err != nil {
 			return 0, err
 		}
@@ -868,14 +915,15 @@ func (s *SKV) writeRecord(key []byte, data []byte) (int64, error) {
 		}
 	}
 
-	pos, _, err := s.writeRecordAtPosition(key, data)
+	pos, _, err := s.writeRecordAtPosition(key, data, false)
 	return pos, err
 }
 
 // readRecord reads a complete record from the current file position
 // If readData is false, the data portion is skipped for efficiency
+// If skipEncryption is true, returns encrypted data as-is without decryption (for backup)
 // Returns: recordType, key, data, recordSize, error
-func (s *SKV) readRecord(readData bool) (recordType byte, key []byte, data []byte, recordSize uint64, err error) {
+func (s *SKV) readRecord(readData bool, skipEncryption bool) (recordType byte, key []byte, data []byte, recordSize uint64, err error) {
 	// Buffer to accumulate record bytes for CRC verification
 	var recordBuf []byte
 
@@ -898,12 +946,22 @@ func (s *SKV) readRecord(readData bool) (recordType byte, key []byte, data []byt
 	keySize := keySizeBuf[0]
 	recordBuf = append(recordBuf, keySizeBuf...)
 
-	// Read key
-	key = make([]byte, keySize)
-	if _, err := io.ReadFull(s.file, key); err != nil {
+	// Read encrypted key
+	encryptedKey := make([]byte, keySize)
+	if _, err := io.ReadFull(s.file, encryptedKey); err != nil {
 		return 0, nil, nil, 0, fmt.Errorf("error reading key: %w", err)
 	}
-	recordBuf = append(recordBuf, key...)
+	recordBuf = append(recordBuf, encryptedKey...)
+
+	// Decrypt key (unless skipEncryption is true)
+	if skipEncryption {
+		key = encryptedKey
+	} else {
+		key, err = s.encryptor.decrypt(encryptedKey)
+		if err != nil {
+			return 0, nil, nil, 0, fmt.Errorf("error decrypting key: %w", err)
+		}
+	}
 
 	// Get compression type from record type
 	baseType := getBaseType(recordType)
@@ -1077,6 +1135,17 @@ func (s *SKV) readRecord(readData bool) (recordType byte, key []byte, data []byt
 				data = decompressed
 			} else {
 				data = tempData
+			}
+
+			// Decrypt data after decompression (unless skipEncryption is true)
+			if skipEncryption {
+				// Keep data as-is (encrypted) for backup
+			} else {
+				decryptedData, err := s.encryptor.decrypt(data)
+				if err != nil {
+					return 0, nil, nil, 0, fmt.Errorf("error decrypting data: %w", err)
+				}
+				data = decryptedData
 			}
 		}
 
@@ -1359,7 +1428,7 @@ func (s *SKV) rebuildCache() error {
 		}
 
 		// Read only record metadata (type and key), skip data for efficiency
-		recordType, key, _, recordSize, err := s.readRecord(false)
+		recordType, key, _, recordSize, err := s.readRecord(false, false)
 		if err != nil {
 			if err == io.EOF {
 				break // End of file
@@ -1442,7 +1511,7 @@ func (s *SKV) GetCtx(ctx context.Context, key []byte) ([]byte, error) {
 	}
 
 	// Read the record
-	_, _, data, _, err := s.readRecord(true)
+	_, _, data, _, err := s.readRecord(true, false)
 	if err != nil {
 		s.logger.Error("Get failed: read error",
 			Field{Key: "key", Value: string(key)},
@@ -1544,7 +1613,7 @@ func (s *SKV) deleteInternal(key []byte) error {
 	}
 
 	// Read the record to get its size (CRC verification will fail after we modify type byte, but that's ok)
-	recordType, _, _, recordSize, err := s.readRecord(false)
+	recordType, _, _, recordSize, err := s.readRecord(false, false)
 	if err != nil {
 		return fmt.Errorf("error reading record: %w", err)
 	}
@@ -1658,7 +1727,7 @@ func (s *SKV) Verify() (*Stats, error) {
 		}
 
 		// Read record metadata and data
-		recordType, key, data, recordSize, err := s.readRecord(true)
+		recordType, key, data, recordSize, err := s.readRecord(true, false)
 		if err != nil {
 			if err == io.EOF {
 				break // End of file
@@ -1807,7 +1876,7 @@ func (s *SKV) compactInternalCtx(ctx context.Context) error {
 		}
 
 		// Read record from original file
-		_, key, data, _, err := s.readRecord(true)
+		_, key, data, _, err := s.readRecord(true, false)
 		if err != nil {
 			tmpFile.Close()
 			return fmt.Errorf("error reading record: %w", err)
@@ -2152,7 +2221,7 @@ func (s *SKV) ForEach(fn func(key []byte, value []byte) error) error {
 		}
 
 		// Read the record
-		_, key, data, _, err := s.readRecord(true)
+		_, key, data, _, err := s.readRecord(true, false)
 		if err != nil {
 			return fmt.Errorf("error reading record: %w", err)
 		}
@@ -2239,7 +2308,7 @@ func (s *SKV) GetBatch(keys [][]byte) (map[string][]byte, error) {
 		}
 
 		// Read the record
-		_, _, data, _, err := s.readRecord(true)
+		_, _, data, _, err := s.readRecord(true, false)
 		if err != nil {
 			return nil, fmt.Errorf("error reading record: %w", err)
 		}
@@ -2259,9 +2328,8 @@ type BackupRecord struct {
 }
 
 // Backup creates a JSON backup of all key-value pairs in the database
-// For values <= 256 bytes, it attempts to store them as strings if they are valid UTF-8,
-// otherwise stores them as base64-encoded data
-// For values > 256 bytes, always uses base64 encoding
+// IMPORTANT: Keys and values are stored as-is (encrypted if encryption is enabled)
+// The backup preserves the encryption state - encrypted data stays encrypted
 func (s *SKV) Backup(filename string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -2275,14 +2343,15 @@ func (s *SKV) Backup(filename string) error {
 			return fmt.Errorf("error seeking to position for key %q: %w", key, err)
 		}
 
-		// Read the record
-		_, _, data, _, err := s.readRecord(true)
+		// Read the record WITHOUT decryption (skipEncryption=true)
+		// This preserves encrypted data as-is
+		_, keyBytes, data, _, err := s.readRecord(true, true)
 		if err != nil {
 			return fmt.Errorf("error reading record for key %q: %w", key, err)
 		}
 
 		record := BackupRecord{
-			Key: key,
+			Key: string(keyBytes),
 		}
 
 		// Decide how to encode the value
@@ -2317,6 +2386,8 @@ func (s *SKV) Backup(filename string) error {
 }
 
 // Restore loads key-value pairs from a JSON backup file
+// IMPORTANT: Restores data as-is (encrypted data stays encrypted)
+// If the backup was created from an encrypted database, this database must use the same encryption
 // This will overwrite existing keys with the same name
 // The database is not cleared before restore - existing keys not in the backup remain
 func (s *SKV) Restore(filename string) error {
@@ -2352,11 +2423,29 @@ func (s *SKV) Restore(filename string) error {
 			data = []byte(record.Value)
 		}
 
-		// Write the record to the database
+		// Write the record WITHOUT encryption (skipEncryption=true)
+		// This preserves the data as-is from the backup
 		key := []byte(record.Key)
-		if err := s.putInternal(key, data); err != nil {
+
+		// Seek to end of file
+		if _, err := s.file.Seek(0, io.SeekEnd); err != nil {
+			return fmt.Errorf("error seeking to end of file: %w", err)
+		}
+
+		// Write record with skipEncryption=true to preserve data as-is
+		position, _, err := s.writeRecordAtPosition(key, data, true)
+		if err != nil {
 			return fmt.Errorf("error restoring key %q: %w", record.Key, err)
 		}
+
+		// Decrypt key for cache (cache is indexed by decrypted keys)
+		decryptedKey, err := s.encryptor.decrypt(key)
+		if err != nil {
+			return fmt.Errorf("error decrypting key for cache: %w", err)
+		}
+
+		// Update cache with decrypted key
+		s.cache[string(decryptedKey)] = position
 	}
 
 	return nil

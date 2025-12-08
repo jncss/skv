@@ -3,8 +3,8 @@
 A Go library for storing key/value data in a sequential binary file format.
 
 [![Production Ready](https://img.shields.io/badge/production-ready-green.svg)](https://github.com/jncss/skv)
-[![Test Coverage](https://img.shields.io/badge/coverage-80.9%25-green.svg)](https://github.com/jncss/skv)
-[![Tests Passing](https://img.shields.io/badge/tests-228%20passing-brightgreen.svg)](https://github.com/jncss/skv)
+[![Test Coverage](https://img.shields.io/badge/coverage-81.0%25-green.svg)](https://github.com/jncss/skv)
+[![Tests Passing](https://img.shields.io/badge/tests-238%20passing-brightgreen.svg)](https://github.com/jncss/skv)
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
 **Performance Metrics:**
@@ -18,11 +18,12 @@ A Go library for storing key/value data in a sequential binary file format.
 - 📊 **WAL overhead** - ~73% slower writes, 0% impact on reads
 - 🧵 **1,900 ops/sec** - Concurrent operations (10 goroutines, race-free)
 - 📦 **37% reduction** - Average compaction savings
-- ✅ **228 tests** - All passing (comprehensive coverage including streaming, safety, context, indexes, cursors, WAL, rollback protection, string convenience functions, and atomic transactions)
+- ✅ **238 tests** - All passing (comprehensive coverage including streaming, safety, context, indexes, cursors, WAL, rollback protection, string convenience functions, atomic transactions, and encryption)
 - 💾 **O(1) memory** - Streaming operations with constant memory usage regardless of file size
 
 ## Features
 
+- **Encryption** - Optional AES or custom cipher encryption for keys and values (password-based, via EasyAES or SimpleCipher)
 - **Atomic Transactions** - ACID guarantees with Begin/Commit/Rollback for multi-operation atomicity (all-or-nothing)
 - **Write-Ahead Log (WAL)** - Crash recovery with automatic operation replay for guaranteed durability and transaction recovery
 - **Structured Logging** - Built-in logging support with JSONLogger, TextLogger, and custom loggers for observability
@@ -61,9 +62,9 @@ Every SKV file starts with a 6-byte header:
 | Field | Size | Description |
 |-------|------|-------------|
 | Magic | 3 bytes | Always "SKV" (0x53 0x4B 0x56) to identify the file format |
-| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.5.1) |
+| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.6.0) |
 
-**Current version:** 0.5.1
+**Current version:** 0.6.0
 
 ### Record Format
 
@@ -1100,6 +1101,7 @@ See [COMPRESSION.md](COMPRESSION.md) for detailed documentation including:
 
 ## Additional Documentation
 
+- **[ENCRYPTION.md](ENCRYPTION.md)** - Encryption with EasyAES and SimpleCipher
 - **[WAL.md](WAL.md)** - Write-Ahead Log internals and crash recovery
 - **[LOGGING.md](LOGGING.md)** - Logging support
 - **[COMPRESSION.md](COMPRESSION.md)** - Compression algorithms and performance

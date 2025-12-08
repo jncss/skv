@@ -50,7 +50,7 @@ func (s *SKV) CreateIndex(name string, keyFunc func([]byte) []byte) error {
 		}
 
 		// Read record data
-		_, _, data, _, err := s.readRecord(true)
+		_, _, data, _, err := s.readRecord(true, false)
 		if err != nil {
 			continue
 		}
@@ -289,7 +289,7 @@ func (s *SKV) RebuildIndex(name string) error {
 		}
 
 		// Read record data
-		_, _, data, _, err := s.readRecord(true)
+		_, _, data, _, err := s.readRecord(true, false)
 		if err != nil {
 			continue
 		}
