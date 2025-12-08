@@ -9,7 +9,8 @@ import (
 )
 
 func main() {
-	fmt.Println("=== SKV Encryption Demo ===\n")
+	fmt.Println("=== SKV Encryption Demo ===")
+	fmt.Println()
 
 	// Example 1: Database without encryption
 	fmt.Println("1. Database WITHOUT encryption:")
