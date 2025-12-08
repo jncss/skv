@@ -144,7 +144,6 @@ theme := db.GetOrDefaultString(
 - **Multi-process concurrent access** - No file locking (use client-server DB)
 - **Complex queries** - No SQL/query language (use SQLite or PostgreSQL)
 - **Very large datasets** - Memory cache may be limiting
-- **Transactional requirements** - No ACID transactions
 
 ## Performance Characteristics
 
