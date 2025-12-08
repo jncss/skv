@@ -875,6 +875,14 @@ func handleRecover() {
 
 	fmt.Printf("Attempting to recover records from '%s'...\n", corruptedFile)
 
+	// IMPORTANT: Recovery reads raw bytes from corrupted file and writes them as-is
+	// If the original file was encrypted, the recovered data will remain encrypted
+	// We must disable encryption during recovery to avoid double-encryption
+	savedEncryptionType := encryptionType
+	savedEncryptionPassword := encryptionPassword
+	encryptionType = "none"
+	encryptionPassword = ""
+
 	// Open corrupted file for reading
 	inFile, err := os.Open(corruptedFile)
 	if err != nil {
@@ -969,6 +977,15 @@ func handleRecover() {
 	fmt.Printf("  Total records recovered: %d\n", recoveredCount)
 	fmt.Printf("  Invalid bytes skipped: %d\n", skippedCount)
 	fmt.Printf("  Recovered database: %s\n", recoveredFile)
+
+	// Restore encryption settings
+	encryptionType = savedEncryptionType
+	encryptionPassword = savedEncryptionPassword
+
+	if savedEncryptionType != "none" {
+		fmt.Printf("\nNote: Original file was encrypted. Recovered file preserves encryption.\n")
+		fmt.Printf("      Use same password to access: -e %s -p <password>\n", savedEncryptionType)
+	}
 }
 
 // recordInfo holds information about a recovered record
@@ -1077,6 +1094,13 @@ func tryParseRecord(fileData []byte, pos int64, fileSize int64) (*recordInfo, in
 	remainingBytes := fileSize - pos
 	if int64(dataSize) > remainingBytes {
 		return nil, 0, fmt.Errorf("data size %d exceeds remaining file size %d", dataSize, remainingBytes)
+	}
+
+	// Additional sanity check: protect against unreasonably large allocations
+	// Even if it fits in the file, don't allocate more than 100MB for a single record
+	const maxReasonableSize = 100 * 1024 * 1024 // 100 MB
+	if dataSize > maxReasonableSize {
+		return nil, 0, fmt.Errorf("data size %d exceeds maximum reasonable size %d", dataSize, maxReasonableSize)
 	}
 
 	// Read data

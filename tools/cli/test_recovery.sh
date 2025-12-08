@@ -85,3 +85,47 @@ echo "Cleaning up test files..."
 rm -f "$TEST_DB" "$CORRUPTED_DB" "$RECOVERED_DB"
 
 echo "=== Test Complete ==="
+echo
+echo "=== Testing Encrypted Recovery ==="
+echo
+
+# Test encrypted database recovery
+ENCRYPTED_DB="test_encrypted.skv"
+ENCRYPTED_CORRUPTED="test_encrypted_corrupted.skv"
+ENCRYPTED_RECOVERED="test_encrypted_recovered.skv"
+PASSWORD="test123secret"
+
+rm -f "$ENCRYPTED_DB" "$ENCRYPTED_CORRUPTED" "$ENCRYPTED_RECOVERED"
+
+echo "1. Creating encrypted database..."
+$CLI -e aes -p "$PASSWORD" put "$ENCRYPTED_DB" secret:key1 "confidential-data-1"
+$CLI -e aes -p "$PASSWORD" put "$ENCRYPTED_DB" secret:key2 "confidential-data-2"
+$CLI -e aes -p "$PASSWORD" put "$ENCRYPTED_DB" secret:key3 "confidential-data-3"
+echo "✓ Created encrypted database with 3 records"
+echo
+
+echo "2. Corrupting encrypted database..."
+cp "$ENCRYPTED_DB" "$ENCRYPTED_CORRUPTED"
+echo "GARBAGE_CORRUPT_DATA" >> "$ENCRYPTED_CORRUPTED"
+echo "✓ Added garbage data to encrypted file"
+echo
+
+echo "3. Recovering encrypted database (with encryption flags)..."
+$CLI -e aes -p "$PASSWORD" recover "$ENCRYPTED_CORRUPTED" "$ENCRYPTED_RECOVERED"
+echo
+
+echo "4. Verifying recovered encrypted data can be read..."
+for key in "secret:key1" "secret:key2" "secret:key3"; do
+    if value=$($CLI -e aes -p "$PASSWORD" get "$ENCRYPTED_RECOVERED" "$key" 2>/dev/null); then
+        echo "  ✓ $key = $value"
+    else
+        echo "  ✗ $key (recovery failed)"
+        exit 1
+    fi
+done
+echo
+
+echo "✓ Encrypted recovery successful!"
+rm -f "$ENCRYPTED_DB" "$ENCRYPTED_CORRUPTED" "$ENCRYPTED_RECOVERED"
+
+echo "=== All Tests Complete ==="

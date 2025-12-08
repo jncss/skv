@@ -491,9 +491,16 @@ skv -e aes -p WRONG get bad.skv key1
 
 **Example 9: Recovery with Encryption**
 ```bash
-# Recover encrypted database (requires password)
+# Recover encrypted database
+# Note: Specify encryption flags to indicate the file WAS encrypted
+# Recovered file will preserve the encryption (data stays encrypted)
 skv -e aes -p mySecretPassword recover corrupted_secure.skv repaired_secure.skv
+
+# Access recovered encrypted database (use same password)
+skv -e aes -p mySecretPassword get repaired_secure.skv mykey
 ```
+
+**Important:** Recovery preserves the encryption state of the original file. If the corrupted file was encrypted, the recovered file will also be encrypted with the same data. You must use the same encryption password to access the recovered database.
 skv get logs.skv log:2024-12-07
 
 # Recover compressed database
