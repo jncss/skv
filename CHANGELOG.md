@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2025-12-08
+
+### Fixed
+- **CLI recover with encryption**: Fixed double-encryption bug when recovering encrypted databases
+  - Recover now preserves raw bytes without re-encrypting
+  - Recovered encrypted databases maintain encryption state and require same password
+  - Added safety check to prevent OOM panic on corrupted data size fields (max 100MB per record)
+  - Enhanced `test_recovery.sh` with encrypted database recovery test
+
+### Documentation
+- **CLI README**: Updated Example 9 with encryption recovery behavior explanation
+- Clarified that recovered files preserve encryption state of original file
+
 ## [0.6.1] - 2025-12-08
 
 ### Changed
