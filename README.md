@@ -62,9 +62,9 @@ Every SKV file starts with a 6-byte header:
 | Field | Size | Description |
 |-------|------|-------------|
 | Magic | 3 bytes | Always "SKV" (0x53 0x4B 0x56) to identify the file format |
-| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.6.0) |
+| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.6.1) |
 
-**Current version:** 0.6.0
+**Current version:** 0.6.1
 
 ### Record Format
 

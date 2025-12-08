@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2025-12-08
+
+### Changed
+- **Dependencies**: Updated `github.com/jncss/easyaes` from v0.0.0-20251208190620-9743bf4abb45 to v1.0.0
+- **Code quality**: Fixed redundant newline in `examples/12-encryption/main.go`
+
 ## [0.6.0] - 2025-12-08
 
 ### Added
@@ -32,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Coverage**: 81.0% (improved from 80.8%)
 
 ### Dependencies
-- **Added**: `github.com/jncss/easyaes` v0.0.0-20251208190620-9743bf4abb45 - AES-256 encryption
+- **Added**: `github.com/jncss/easyaes` v1.0.0 - AES-256 encryption
 - **Added**: `github.com/jncss/simplecipher` v1.0.0 - Custom XOR cipher
 
 ### Fixed
