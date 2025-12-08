@@ -3,7 +3,7 @@
 A Go library for storing key/value data in a sequential binary file format.
 
 [![Production Ready](https://img.shields.io/badge/production-ready-green.svg)](https://github.com/jncss/skv)
-[![Test Coverage](https://img.shields.io/badge/coverage-80.8%25-green.svg)](https://github.com/jncss/skv)
+[![Test Coverage](https://img.shields.io/badge/coverage-80.9%25-green.svg)](https://github.com/jncss/skv)
 [![Tests Passing](https://img.shields.io/badge/tests-228%20passing-brightgreen.svg)](https://github.com/jncss/skv)
 [![Go Version](https://img.shields.io/badge/go-1.24.0+-blue.svg)](https://golang.org/dl/)
 
@@ -61,9 +61,9 @@ Every SKV file starts with a 6-byte header:
 | Field | Size | Description |
 |-------|------|-------------|
 | Magic | 3 bytes | Always "SKV" (0x53 0x4B 0x56) to identify the file format |
-| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.5.0) |
+| Version | 3 bytes | Version number: Major.Minor.Patch (e.g., 0.5.1) |
 
-**Current version:** 0.5.0
+**Current version:** 0.5.1
 
 ### Record Format
 

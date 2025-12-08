@@ -23,7 +23,7 @@ const (
 	HeaderSize   = 6     // Total header size: 3 bytes magic + 3 bytes version
 	VersionMajor = 0     // Major version number
 	VersionMinor = 5     // Minor version number
-	VersionPatch = 0     // Patch version number
+	VersionPatch = 1     // Patch version number
 )
 
 // Record type based on the size of the data field
@@ -634,12 +634,12 @@ func (s *SKV) CloseWithCompact() error {
 // writeRecordAtPosition writes a complete record (type, key, data) at the current file position
 // Returns the position where the record was written
 // Uses streaming CRC calculation to avoid loading large records into memory
-func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
+func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, uint64, error) {
 	// Try to compress data if compression is enabled
 	originalSize := uint64(len(data))
 	compressedData, actualCompressionType, err := compress(data, s.compressionType)
 	if err != nil {
-		return 0, fmt.Errorf("compression error: %w", err)
+		return 0, 0, fmt.Errorf("compression error: %w", err)
 	}
 
 	// Use compressed data if compression was applied
@@ -674,7 +674,7 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 	// Save position before writing
 	recordPos, err := s.file.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return 0, fmt.Errorf("error getting current position: %w", err)
+		return 0, 0, fmt.Errorf("error getting current position: %w", err)
 	}
 
 	// Initialize streaming CRC calculation based on record type
@@ -703,19 +703,19 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 	// Write the type
 	typeBuf := []byte{recordType}
 	if err := writeAndHash(typeBuf); err != nil {
-		return 0, fmt.Errorf("error writing type: %w", err)
+		return 0, 0, fmt.Errorf("error writing type: %w", err)
 	}
 
 	// Write the key size
 	keySize := byte(len(key))
 	keySizeBuf := []byte{keySize}
 	if err := writeAndHash(keySizeBuf); err != nil {
-		return 0, fmt.Errorf("error writing key size: %w", err)
+		return 0, 0, fmt.Errorf("error writing key size: %w", err)
 	}
 
 	// Write the key
 	if err := writeAndHash(key); err != nil {
-		return 0, fmt.Errorf("error writing key: %w", err)
+		return 0, 0, fmt.Errorf("error writing key: %w", err)
 	}
 
 	// If compressed, write original size first
@@ -735,7 +735,7 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 			binary.LittleEndian.PutUint64(originalSizeBuf, originalSize)
 		}
 		if err := writeAndHash(originalSizeBuf); err != nil {
-			return 0, fmt.Errorf("error writing original size: %w", err)
+			return 0, 0, fmt.Errorf("error writing original size: %w", err)
 		}
 	}
 
@@ -755,7 +755,7 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 		binary.LittleEndian.PutUint64(dataSizeBuf, dataSize)
 	}
 	if err := writeAndHash(dataSizeBuf); err != nil {
-		return 0, fmt.Errorf("error writing data size: %w", err)
+		return 0, 0, fmt.Errorf("error writing data size: %w", err)
 	}
 
 	// Write the data in chunks to avoid memory pressure for large values
@@ -766,7 +766,7 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 			end = len(dataToWrite)
 		}
 		if err := writeAndHash(dataToWrite[offset:end]); err != nil {
-			return 0, fmt.Errorf("error writing data chunk: %w", err)
+			return 0, 0, fmt.Errorf("error writing data chunk: %w", err)
 		}
 	}
 
@@ -777,7 +777,7 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 		crcBuf := make([]byte, 2)
 		binary.LittleEndian.PutUint16(crcBuf, crc)
 		if _, err := s.file.Write(crcBuf); err != nil {
-			return 0, fmt.Errorf("error writing CRC: %w", err)
+			return 0, 0, fmt.Errorf("error writing CRC: %w", err)
 		}
 	} else {
 		// CRC-32
@@ -785,28 +785,32 @@ func (s *SKV) writeRecordAtPosition(key []byte, data []byte) (int64, error) {
 		crcBuf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(crcBuf, crc)
 		if _, err := s.file.Write(crcBuf); err != nil {
-			return 0, fmt.Errorf("error writing CRC: %w", err)
+			return 0, 0, fmt.Errorf("error writing CRC: %w", err)
 		}
 	}
 
 	// Sync to disk
 	if err := s.file.Sync(); err != nil {
-		return 0, fmt.Errorf("error syncing to disk: %w", err)
+		return 0, 0, fmt.Errorf("error syncing to disk: %w", err)
 	}
 
-	return recordPos, nil
+	// Calculate actual record size written
+	actualRecordSize := calculateRecordSize(byte(len(key)), dataSize, recordType)
+
+	return recordPos, actualRecordSize, nil
 }
 
 // writeRecord writes a complete record (type, key, data)
 // Returns the position where the record was written
 // Tries to reuse free space if available, otherwise appends to end of file
 func (s *SKV) writeRecord(key []byte, data []byte) (int64, error) {
-	// Calculate total size needed for this record
-	recordType := getRecordType(uint64(len(data)))
-	neededSize := calculateRecordSize(byte(len(key)), uint64(len(data)), recordType)
+	// Calculate estimated size for finding free space
+	// This may be larger than actual if compression reduces size
+	estimatedRecordType := getRecordType(uint64(len(data)))
+	estimatedSize := calculateRecordSize(byte(len(key)), uint64(len(data)), estimatedRecordType)
 
-	// Try to find suitable free space
-	freeIdx := s.findBestFreeSpace(neededSize)
+	// Try to find suitable free space (using estimated size)
+	freeIdx := s.findBestFreeSpace(estimatedSize)
 
 	if freeIdx >= 0 {
 		// Reuse free space
@@ -818,13 +822,14 @@ func (s *SKV) writeRecord(key []byte, data []byte) (int64, error) {
 			return 0, fmt.Errorf("error seeking to free space: %w", err)
 		}
 
-		// Write the record
-		if _, err := s.writeRecordAtPosition(key, data); err != nil {
+		// Write the record and get actual size written
+		_, actualSize, err := s.writeRecordAtPosition(key, data)
+		if err != nil {
 			return 0, err
 		}
 
-		// If there's leftover space, fill with padding
-		leftover := freeSlot.size - neededSize
+		// Calculate leftover space using actual size written
+		leftover := freeSlot.size - actualSize
 		if leftover > 0 {
 			padding := make([]byte, leftover)
 			for i := range padding {
@@ -863,7 +868,8 @@ func (s *SKV) writeRecord(key []byte, data []byte) (int64, error) {
 		}
 	}
 
-	return s.writeRecordAtPosition(key, data)
+	pos, _, err := s.writeRecordAtPosition(key, data)
+	return pos, err
 }
 
 // readRecord reads a complete record from the current file position
@@ -1628,8 +1634,8 @@ func (s *SKV) Verify() (*Stats, error) {
 	}
 
 	var totalKeySize int64
-	var totalDataSize int64
-	var activeDataSize int64
+	var totalDataSize int64    // Uncompressed data size for averages
+	var activeRecordSize int64 // On-disk size of active records (compressed)
 
 	// Read all records in the file
 	for {
@@ -1637,6 +1643,8 @@ func (s *SKV) Verify() (*Stats, error) {
 		paddingCount, err := s.skipPaddingBytes()
 		if err != nil {
 			if err == io.EOF {
+				// Add final padding before breaking
+				stats.PaddingBytes += paddingCount
 				break
 			}
 			return nil, fmt.Errorf("error skipping padding: %w", err)
@@ -1661,26 +1669,27 @@ func (s *SKV) Verify() (*Stats, error) {
 		// Count the record
 		stats.TotalRecords++
 		totalKeySize += int64(len(key))
-		totalDataSize += int64(len(data))
+		totalDataSize += int64(len(data)) // Uncompressed size
 
 		if isDeleted(recordType) {
 			stats.DeletedRecords++
 			stats.WastedSpace += int64(recordSize)
 		} else {
 			stats.ActiveRecords++
-			activeDataSize += int64(recordSize)
+			activeRecordSize += int64(recordSize) // On-disk size (compressed + metadata)
 		}
 	}
 
 	// Calculate data size (all records, excluding header and padding)
 	stats.DataSize = stats.FileSize - stats.HeaderSize - stats.PaddingBytes
 
-	// Calculate wasted space percentage
+	// Calculate wasted space percentage and efficiency
 	usableSpace := stats.FileSize - stats.HeaderSize
 	if usableSpace > 0 {
 		totalWasted := stats.WastedSpace + stats.PaddingBytes
 		stats.WastedPercent = (float64(totalWasted) / float64(usableSpace)) * 100.0
-		stats.Efficiency = (float64(activeDataSize) / float64(usableSpace)) * 100.0
+		// Efficiency = percentage of disk space used by active records (compressed)
+		stats.Efficiency = (float64(activeRecordSize) / float64(usableSpace)) * 100.0
 	}
 
 	// Calculate averages

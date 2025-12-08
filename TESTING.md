@@ -200,7 +200,7 @@ go test -list=Fuzz
 ## Test Statistics
 
 - **Total tests**: 228 (221 regular + 7 fuzz functions)
-- **Test coverage**: 80.8%
+- **Test coverage**: 80.9%
 - **Total lines**: ~9,500+
 - **Test files**: 17
 

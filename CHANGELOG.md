@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2025-12-08
+
+### Fixed
+- **Compression with record reuse**: Fixed padding calculation when reusing space with compressed records
+  - `writeRecord()` now uses actual written size instead of estimated size for padding calculation
+  - Prevents data corruption when updating uncompressed records with compressed data
+  - `writeRecordAtPosition()` signature changed to return actual record size: `(int64, uint64, error)`
+- **Verify statistics**: Fixed padding detection and efficiency calculation with compressed records
+  - Padding bytes after last record now counted correctly
+  - `Efficiency` and `Wasted Percent` now accurate for databases with mixed compression levels
+  - Renamed `activeDataSize` → `activeRecordSize` for clarity (on-disk size vs decompressed size)
+
 ## [0.5.0] - 2025-12-08
 
 ### Added
