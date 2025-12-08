@@ -1,3 +1,3 @@
 - IA Assisted cli tool
 - Web based (or something like 'electron') skv editor/manager
-- Encrypted databases
+- Encrypted skv files
