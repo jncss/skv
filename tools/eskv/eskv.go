@@ -29,8 +29,6 @@ const (
 )
 
 var (
-	// Map per guardar la ruta del fitxer actual de cada sessió
-	currentFiles = make(map[string]string)
 	// Heartbeat tracking
 	lastHeartbeat  time.Time
 	heartbeatMutex sync.RWMutex
@@ -142,23 +140,105 @@ func closeAllConnections() {
 	dbPool = make(map[string]*dbConnection)
 }
 
-// Funció per obrir la URL en el navegador per defecte (depèn de l'OS)
+// Funció per obrir la URL en el navegador en mode aplicació (sense barra d'URL)
 func openBrowser(url string) error {
 	var cmd string
 	var args []string
 
 	switch runtime.GOOS {
 	case "windows":
-		cmd = "cmd"
-		args = []string{"/c", "start", url}
+		// Intentar Chrome en mode app
+		chromePath := findBrowser([]string{
+			"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+			"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+		})
+		if chromePath != "" {
+			cmd = chromePath
+			args = []string{"--app=" + url, "--window-size=1400,900"}
+		} else {
+			// Fallback al navegador per defecte
+			cmd = "cmd"
+			args = []string{"/c", "start", url}
+		}
 	case "darwin": // macOS
-		cmd = "open"
-		args = []string{url}
+		// Intentar Chrome/Chromium en mode app
+		chromePath := findBrowser([]string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		})
+		if chromePath != "" {
+			cmd = chromePath
+			args = []string{"--app=" + url, "--window-size=1400,900"}
+		} else {
+			// Fallback a open
+			cmd = "open"
+			args = []string{url}
+		}
 	default: // linux, freebsd, openbsd, netbsd
-		cmd = "xdg-open"
-		args = []string{url}
+		// Intentar Chrome/Chromium en mode app (incloent Flatpak)
+		chromePath := findBrowser([]string{
+			"google-chrome",
+			"chromium-browser",
+			"chromium",
+			"flatpak", // S'usarà amb args especials més endavant
+		})
+		if chromePath != "" {
+			// Si és Flatpak, usar comandament especial
+			if chromePath == "flatpak" {
+				// Intentar Google Chrome Flatpak
+				if exec.Command("flatpak", "list", "--app").Run() == nil {
+					cmd = "flatpak"
+					args = []string{"run", "com.google.Chrome", "--app=" + url, "--window-size=1400,900"}
+				} else {
+					// Fallback si Flatpak no està disponible
+					cmd = "xdg-open"
+					args = []string{url}
+				}
+			} else {
+				cmd = chromePath
+				args = []string{"--app=" + url, "--window-size=1400,900"}
+			}
+		} else {
+			// Fallback a xdg-open
+			cmd = "xdg-open"
+			args = []string{url}
+		}
 	}
 	return exec.Command(cmd, args...).Start()
+}
+
+// findBrowser cerca un navegador en les rutes especificades
+func findBrowser(paths []string) string {
+	for _, path := range paths {
+		// Per comandaments del sistema, usar LookPath
+		if !strings.HasPrefix(path, "/") && !strings.Contains(path, ":\\") {
+			if _, err := exec.LookPath(path); err == nil {
+				return path
+			}
+		} else {
+			// Per a rutes absolutes, comprovar si el fitxer existeix
+			if _, err := os.Stat(path); err == nil {
+				return path
+			}
+		}
+	}
+
+	// En Linux, comprovar si Chrome està instal·lat com a Flatpak
+	if runtime.GOOS == "linux" {
+		if _, err := exec.LookPath("flatpak"); err == nil {
+			// Comprovar si Google Chrome està instal·lat com a Flatpak
+			cmd := exec.Command("flatpak", "list", "--app", "--columns=application")
+			output, err := cmd.Output()
+			if err == nil {
+				apps := string(output)
+				if strings.Contains(apps, "com.google.Chrome") {
+					return "flatpak"
+				}
+			}
+		}
+	}
+
+	return ""
 }
 
 // Pàgina principal
@@ -902,14 +982,14 @@ func indexHandler(c echo.Context) error {
 				<div class="bg-gradient-to-br from-green-500 to-green-600 rounded-lg p-3 text-white shadow-md">
 					<div class="flex items-center gap-2 mb-1.5">
 						<i class="fas fa-tachometer-alt"></i>
-						<div class="text-xs font-medium opacity-90">Eficiència</div>
+						<div class="text-xs font-medium opacity-90">Efficiency</div>
 					</div>
 					<div class="text-2xl font-bold">${data.stats.efficiency.toFixed(2)}%</div>
 				</div>
 				<div class="bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg p-3 text-white shadow-md">
 					<div class="flex items-center gap-2 mb-1.5">
 						<i class="fas fa-exclamation-triangle"></i>
-						<div class="text-xs font-medium opacity-90">Desaprofitat</div>
+						<div class="text-xs font-medium opacity-90">Wasted</div>
 					</div>
 					<div class="text-2xl font-bold">${data.stats.wasted_percent.toFixed(2)}%</div>
 			</div>
@@ -1804,34 +1884,23 @@ func parseFileHandler(c echo.Context) error {
 			return nil
 		}
 
-		// Obtenir tots els registres amb Keys() + Get() (més robust que cursors)
+		// Utilitzar cursor per obtenir registres ordenats per clau
 		records := []Record{}
-		keys, err := db.Keys()
-		if err != nil {
-			// Retornar amb stats però sense records
-			response = map[string]interface{}{
-				"stats": map[string]interface{}{
-					"total_records":     stats.TotalRecords,
-					"active_records":    stats.ActiveRecords,
-					"deleted_records":   stats.DeletedRecords,
-					"file_size":         stats.FileSize,
-					"efficiency":        stats.Efficiency,
-					"wasted_percent":    stats.WastedPercent,
-					"average_key_size":  stats.AverageKeySize,
-					"average_data_size": stats.AverageDataSize,
-				},
-				"records": []Record{},
-			}
-			return nil
-		}
-
-		// Llegir cada valor (salta els que estan corruptes)
 		corruptedKeys := []string{}
-		for _, key := range keys {
-			value, err := db.Get(key)
+
+		cursor := db.NewCursor(nil) // nil per obtenir tots els registres ordenats
+		defer cursor.Close()
+
+		for {
+			key, value, err := cursor.Next()
+			if err == io.EOF {
+				break
+			}
 			if err != nil {
 				// Skip corrupted records and track them
-				corruptedKeys = append(corruptedKeys, string(key))
+				if key != nil {
+					corruptedKeys = append(corruptedKeys, string(key))
+				}
 				continue
 			}
 			records = append(records, Record{
@@ -2383,6 +2452,14 @@ func restoreHandler(c echo.Context) error {
 	dst.Close()
 	defer os.Remove(tmpFile)
 
+	// Tancar connexió en cache abans del restore per forçar recàrrega
+	dbPoolMutex.Lock()
+	if conn, exists := dbPool[filepath]; exists {
+		conn.db.Close()
+		delete(dbPool, filepath)
+	}
+	dbPoolMutex.Unlock()
+
 	// Open database and restore
 	db, err := skv.OpenWithOptions(filepath, skv.DefaultOptions())
 	if err != nil {
@@ -2483,7 +2560,7 @@ func main() {
 	}()
 
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -2494,7 +2571,7 @@ func main() {
 				elapsed := time.Since(lastHeartbeat)
 				heartbeatMutex.RUnlock()
 
-				if elapsed > 60*time.Second {
+				if elapsed > 5*time.Second {
 					log.Println("Navegador tancat. Tancant servidor...")
 					cancel()
 					go func() {
@@ -2538,7 +2615,7 @@ func main() {
 		log.Println("Tancant per inactivitat del navegador...")
 	}
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer shutdownCancel()
 
 	// Tancar totes les connexions de BD abans de tancar el servidor
