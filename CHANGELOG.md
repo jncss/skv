@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2025-12-09
+
+### Fixed
+- **Installation**: Fixed `go install` failure caused by files with colons in their names
+  - Removed invalid file paths from Git repository that prevented module zip creation
+  - Added `.gitignore` to prevent tracking of extracted files
+  - Updated `file_operations.go` example to sanitize filenames (replace `:` with `_`)
+
 ## [0.6.2] - 2025-12-08
 
 ### Fixed
