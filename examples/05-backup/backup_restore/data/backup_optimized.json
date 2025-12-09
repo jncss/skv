@@ -1,0 +1,32 @@
+[
+  {
+    "key": "user:3",
+    "value": "{\"name\": \"Charlie\", \"email\": \"charlie@example.com\"}",
+    "is_binary": false
+  },
+  {
+    "key": "config:theme",
+    "value": "dark",
+    "is_binary": false
+  },
+  {
+    "key": "config:lang",
+    "value": "en",
+    "is_binary": false
+  },
+  {
+    "key": "session:abc",
+    "value": "{\"user_id\": \"1\", \"expires\": \"2024-12-31\"}",
+    "is_binary": false
+  },
+  {
+    "key": "user:1",
+    "value": "{\"name\": \"Alice\", \"email\": \"alice@example.com\"}",
+    "is_binary": false
+  },
+  {
+    "key": "user:2",
+    "value": "{\"name\": \"Bob\", \"email\": \"bob@example.com\"}",
+    "is_binary": false
+  }
+]
