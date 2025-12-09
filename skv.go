@@ -22,8 +22,8 @@ const (
 	HeaderMagic  = "SKV" // Magic bytes to identify SKV files
 	HeaderSize   = 6     // Total header size: 3 bytes magic + 3 bytes version
 	VersionMajor = 0     // Major version number
-	VersionMinor = 5     // Minor version number
-	VersionPatch = 1     // Patch version number
+	VersionMinor = 7     // Minor version number
+	VersionPatch = 0     // Patch version number
 )
 
 // Record type based on the size of the data field
@@ -1451,12 +1451,12 @@ func (s *SKV) rebuildCache() error {
 			// Add to free space list (record + padding)
 			totalFreeSize := recordSize + uint64(postPaddingSize)
 			s.freeSpace = append(s.freeSpace, FreeSpace{
-				position: currentPos + int64(paddingSize),
+				position: currentPos,
 				size:     totalFreeSize,
 			})
 		} else {
-			// Add or update in cache
-			s.cache[keyStr] = currentPos + int64(paddingSize)
+			// Add or update in cache (currentPos is already after padding)
+			s.cache[keyStr] = currentPos
 		}
 	}
 
@@ -1732,7 +1732,8 @@ func (s *SKV) Verify() (*Stats, error) {
 			if err == io.EOF {
 				break // End of file
 			}
-			return nil, fmt.Errorf("error reading record: %w", err)
+			// Any other error indicates corruption (e.g., truncated record, CRC mismatch, invalid format)
+			return nil, fmt.Errorf("database corruption detected at position 0x%x: %w", posAfterPadding, err)
 		}
 
 		// Count the record

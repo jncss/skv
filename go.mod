@@ -1,4 +1,4 @@
-// SKV v0.6.2 - Encryption support with AES and SimpleCipher
+// SKV v0.7.0 - New features and improvements
 module github.com/jncss/skv
 
 go 1.24.0

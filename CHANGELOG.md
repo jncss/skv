@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2025-12-09
+
+### Changed
+- **Version**: Updated to 0.7.0
+- **Internal**: Fixed padding calculation in `rebuildCache()` for accurate free space tracking
+- **Error reporting**: Enhanced `Verify()` with hexadecimal position information for corruption detection
+
+### Fixed
+- Cache position calculation now correctly accounts for padding bytes
+- Improved error messages in verify operations
+
 ## [0.6.3] - 2025-12-09
 
 ### Fixed
