@@ -1,0 +1,11 @@
+# Ignore extracted files from file_operations example
+examples/02-advanced/file_operations/data/files/extracted/
+
+# IDE files
+.vscode/
+.idea/
+
+# Build artifacts
+*.exe
+*.test
+*.out
