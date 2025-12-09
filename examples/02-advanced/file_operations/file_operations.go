@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/jncss/skv"
 )
@@ -194,8 +195,10 @@ connection = localhost:5432
 
 	extracted := 0
 	db.ForEachString(func(key string, value string) error {
-		// Sanitize key to create filename
-		filename := extractDir + "/" + key
+		// Sanitize key to create filename (replace colons with underscores)
+		// Colons are invalid in file paths on some systems and in Go module zip files
+		sanitizedKey := strings.ReplaceAll(key, ":", "_")
+		filename := extractDir + "/" + sanitizedKey
 
 		// Create parent directories if needed
 		err := os.MkdirAll(extractDir, 0755)
