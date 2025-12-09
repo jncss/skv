@@ -1,5 +1,6 @@
 # Ignore extracted files from file_operations example
 examples/02-advanced/file_operations/data/files/extracted/
+.devcontainer/
 
 # IDE files
 .vscode/
