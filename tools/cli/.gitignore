@@ -1,9 +1,0 @@
-# Binary
-cli
-
-# Test data
-testdata/
-
-# Go build artifacts
-*.test
-*.out
