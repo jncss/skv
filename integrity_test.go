@@ -430,7 +430,7 @@ func TestFreeSpaceReuse(t *testing.T) {
 		}
 	})
 
-	// Test 3: Update with larger size creates new record
+	// Test 3: Update with larger size creates new record at end (old record truncated if at end)
 	t.Run("LargerSize", func(t *testing.T) {
 		testFile := "test_freespace_larger.skv"
 		os.Remove(testFile)
@@ -442,6 +442,8 @@ func TestFreeSpaceReuse(t *testing.T) {
 		}
 		defer db.Close()
 
+		// Add two records so the first one is not at the end
+		db.Put([]byte("key1"), []byte("first"))
 		db.Put([]byte("key3"), []byte("v"))
 
 		stats1, err := db.Verify()
@@ -449,7 +451,8 @@ func TestFreeSpaceReuse(t *testing.T) {
 			t.Fatalf("Verify failed: %v", err)
 		}
 
-		// Update with much larger size
+		// Update key3 with much larger size - old record is at end, will be truncated
+		// New record goes at end
 		db.Update([]byte("key3"), []byte("very-long-value-that-wont-fit"))
 
 		stats2, err := db.Verify()
@@ -457,14 +460,15 @@ func TestFreeSpaceReuse(t *testing.T) {
 			t.Fatalf("Verify failed: %v", err)
 		}
 
-		// Should have 2 total records (old too small, new created)
-		if stats2.TotalRecords != stats1.TotalRecords+1 {
-			t.Errorf("Expected new record for larger update, total: %d", stats2.TotalRecords)
+		// With truncation: old record removed, new added = same total
+		// Total should still be 2 (key1 + key3_new), old key3 was truncated
+		if stats2.TotalRecords != stats1.TotalRecords {
+			t.Errorf("Expected same total records after truncation, before: %d, after: %d", stats1.TotalRecords, stats2.TotalRecords)
 		}
 
-		// Should have 1 deleted record
-		if stats2.DeletedRecords != stats1.DeletedRecords+1 {
-			t.Errorf("Expected 1 more deleted record, got: %d", stats2.DeletedRecords)
+		// No deleted records (old one was truncated)
+		if stats2.DeletedRecords != 0 {
+			t.Errorf("Expected 0 deleted records after truncation, got: %d", stats2.DeletedRecords)
 		}
 	})
 
@@ -611,4 +615,380 @@ func TestRebuildCacheWithFreeSpace(t *testing.T) {
 	if err != ErrKeyNotFound {
 		t.Errorf("Expected ErrKeyNotFound for deleted key2")
 	}
+}
+
+func TestFreeSpaceCoalescing(t *testing.T) {
+	testFile := "test_freespace_coalescing.skv"
+	os.Remove(testFile)
+	defer os.Remove(testFile)
+	defer os.Remove(testFile + ".wal")
+
+	db, err := Open(testFile)
+	if err != nil {
+		t.Fatalf("Error opening database: %v", err)
+	}
+	defer db.Close()
+
+	// Test 1: Delete consecutive records and verify they are coalesced
+	// Note: we need a "keeper" record at the end to prevent truncation
+	t.Run("ConsecutiveDeletes", func(t *testing.T) {
+		// Add three consecutive keys with same size values, plus a keeper
+		db.Put([]byte("key1"), bytes.Repeat([]byte("a"), 100))
+		db.Put([]byte("key2"), bytes.Repeat([]byte("b"), 100))
+		db.Put([]byte("key3"), bytes.Repeat([]byte("c"), 100))
+		db.Put([]byte("keeper"), bytes.Repeat([]byte("K"), 10)) // Keeps others from being at end
+
+		// Get positions for later verification
+		db.mu.RLock()
+		pos1 := db.cache["key1"]
+		pos2 := db.cache["key2"]
+		pos3 := db.cache["key3"]
+		db.mu.RUnlock()
+
+		// Verify positions are consecutive (approximately)
+		if pos2 <= pos1 || pos3 <= pos2 {
+			t.Fatalf("Expected consecutive positions: pos1=%d, pos2=%d, pos3=%d", pos1, pos2, pos3)
+		}
+
+		// Delete middle record first
+		if err := db.Delete([]byte("key2")); err != nil {
+			t.Fatalf("Error deleting key2: %v", err)
+		}
+
+		db.mu.RLock()
+		freeCount := len(db.freeSpace)
+		db.mu.RUnlock()
+
+		if freeCount != 1 {
+			t.Errorf("After deleting key2: expected 1 free space, got %d", freeCount)
+		}
+
+		// Delete first record - should coalesce with key2's space
+		if err := db.Delete([]byte("key1")); err != nil {
+			t.Fatalf("Error deleting key1: %v", err)
+		}
+
+		db.mu.RLock()
+		freeCount = len(db.freeSpace)
+		if freeCount != 1 {
+			t.Errorf("After deleting key1: expected 1 coalesced free space, got %d", freeCount)
+		}
+
+		// Verify the free space starts at pos1 (first deleted record)
+		if len(db.freeSpace) > 0 && db.freeSpace[0].position != pos1 {
+			t.Errorf("Expected coalesced free space to start at %d, got %d", pos1, db.freeSpace[0].position)
+		}
+		db.mu.RUnlock()
+
+		// Delete third record - should coalesce all three (keeper prevents truncation)
+		if err := db.Delete([]byte("key3")); err != nil {
+			t.Fatalf("Error deleting key3: %v", err)
+		}
+
+		db.mu.RLock()
+		freeCount = len(db.freeSpace)
+		if freeCount != 1 {
+			t.Errorf("After deleting key3: expected 1 coalesced free space, got %d", freeCount)
+		}
+
+		// Verify the coalesced free space covers all three records
+		if len(db.freeSpace) > 0 {
+			coalescedSize := db.freeSpace[0].size
+			// Each record is approximately: 1 (type) + 1 (key_size) + 4 (key) + 1 (data_size) + 100 (data) + 2 (CRC) = ~109
+			// Three records should be around 327+ bytes
+			if coalescedSize < 300 {
+				t.Errorf("Expected coalesced size > 300, got %d", coalescedSize)
+			}
+		}
+		db.mu.RUnlock()
+	})
+
+	// Test 2: Verify coalescing works after reopen
+	t.Run("CoalescingAfterReopen", func(t *testing.T) {
+		testFile2 := "test_freespace_coalescing2.skv"
+		os.Remove(testFile2)
+		defer os.Remove(testFile2)
+		defer os.Remove(testFile2 + ".wal")
+
+		db2, err := Open(testFile2)
+		if err != nil {
+			t.Fatalf("Error opening database: %v", err)
+		}
+
+		// Add three consecutive keys plus a keeper
+		db2.Put([]byte("a"), bytes.Repeat([]byte("x"), 50))
+		db2.Put([]byte("b"), bytes.Repeat([]byte("y"), 50))
+		db2.Put([]byte("c"), bytes.Repeat([]byte("z"), 50))
+		db2.Put([]byte("keeper"), bytes.Repeat([]byte("K"), 10)) // Prevents truncation
+
+		// Delete first three (keeper stays)
+		db2.Delete([]byte("a"))
+		db2.Delete([]byte("b"))
+		db2.Delete([]byte("c"))
+
+		db2.mu.RLock()
+		freeCountBefore := len(db2.freeSpace)
+		coalescedSizeBefore := uint64(0)
+		if freeCountBefore > 0 {
+			coalescedSizeBefore = db2.freeSpace[0].size
+		}
+		db2.mu.RUnlock()
+
+		if freeCountBefore != 1 {
+			t.Errorf("Expected 1 coalesced free space before close, got %d", freeCountBefore)
+		}
+
+		db2.Close()
+
+		// Reopen and verify coalescing is preserved
+		db2, err = Open(testFile2)
+		if err != nil {
+			t.Fatalf("Error reopening database: %v", err)
+		}
+		defer db2.Close()
+
+		db2.mu.RLock()
+		freeCountAfter := len(db2.freeSpace)
+		coalescedSizeAfter := uint64(0)
+		if freeCountAfter > 0 {
+			coalescedSizeAfter = db2.freeSpace[0].size
+		}
+		db2.mu.RUnlock()
+
+		if freeCountAfter != 1 {
+			t.Errorf("After reopen: expected 1 coalesced free space, got %d", freeCountAfter)
+		}
+
+		// The size should be the same (or similar, accounting for padding)
+		if coalescedSizeAfter < coalescedSizeBefore-10 || coalescedSizeAfter > coalescedSizeBefore+10 {
+			t.Errorf("Coalesced size changed after reopen: before=%d, after=%d", coalescedSizeBefore, coalescedSizeAfter)
+		}
+	})
+
+	// Test 3: Verify a new record can reuse coalesced space (when not at end of file)
+	t.Run("ReuseCoalescedSpace", func(t *testing.T) {
+		testFile3 := "test_freespace_reuse_coalesced.skv"
+		os.Remove(testFile3)
+		defer os.Remove(testFile3)
+		defer os.Remove(testFile3 + ".wal")
+
+		db3, err := Open(testFile3)
+		if err != nil {
+			t.Fatalf("Error opening database: %v", err)
+		}
+		defer db3.Close()
+
+		// Add four records - we'll delete the first three (not at end)
+		db3.Put([]byte("x"), bytes.Repeat([]byte("1"), 30))
+		db3.Put([]byte("y"), bytes.Repeat([]byte("2"), 30))
+		db3.Put([]byte("z"), bytes.Repeat([]byte("3"), 30))
+		db3.Put([]byte("keeper"), bytes.Repeat([]byte("K"), 30)) // This stays, keeps others from being at end
+
+		db3.mu.RLock()
+		pos1 := db3.cache["x"]
+		db3.mu.RUnlock()
+
+		// Delete first three (not at end because "keeper" is after them)
+		db3.Delete([]byte("x"))
+		db3.Delete([]byte("y"))
+		db3.Delete([]byte("z"))
+
+		db3.mu.RLock()
+		freeCount := len(db3.freeSpace)
+		var coalescedSize uint64
+		if freeCount > 0 {
+			coalescedSize = db3.freeSpace[0].size
+		}
+		db3.mu.RUnlock()
+
+		if freeCount != 1 {
+			t.Fatalf("Expected 1 coalesced free space, got %d", freeCount)
+		}
+
+		// Add a new record that fits in the coalesced space
+		newValue := bytes.Repeat([]byte("N"), 80) // Larger than individual records
+		if err := db3.Put([]byte("new"), newValue); err != nil {
+			t.Fatalf("Error putting new key: %v", err)
+		}
+
+		db3.mu.RLock()
+		newPos := db3.cache["new"]
+		freeCountAfter := len(db3.freeSpace)
+		db3.mu.RUnlock()
+
+		// The new record should have reused the coalesced space
+		if newPos != pos1 {
+			t.Errorf("Expected new record at position %d (coalesced start), got %d", pos1, newPos)
+		}
+
+		// Free space should be 0 or have reduced
+		if freeCountAfter > 0 {
+			db3.mu.RLock()
+			remainingSize := db3.freeSpace[0].size
+			db3.mu.RUnlock()
+			if remainingSize >= coalescedSize {
+				t.Errorf("Free space should have reduced after reuse")
+			}
+		}
+
+		// Verify the new value is correct
+		retrieved, err := db3.Get([]byte("new"))
+		if err != nil {
+			t.Fatalf("Error getting new key: %v", err)
+		}
+		if !bytes.Equal(retrieved, newValue) {
+			t.Errorf("Retrieved value doesn't match")
+		}
+	})
+}
+
+func TestDeleteAtEndTruncatesFile(t *testing.T) {
+	testFile := "test_delete_truncate.skv"
+	os.Remove(testFile)
+	defer os.Remove(testFile)
+	defer os.Remove(testFile + ".wal")
+
+	db, err := Open(testFile)
+	if err != nil {
+		t.Fatalf("Error opening database: %v", err)
+	}
+	defer db.Close()
+
+	// Test 1: Delete last record truncates file
+	t.Run("DeleteLastRecord", func(t *testing.T) {
+		db.Put([]byte("key1"), bytes.Repeat([]byte("a"), 100))
+		db.Put([]byte("key2"), bytes.Repeat([]byte("b"), 100))
+		db.Put([]byte("key3"), bytes.Repeat([]byte("c"), 100))
+
+		// Get file size before delete
+		info, _ := os.Stat(testFile)
+		sizeBefore := info.Size()
+
+		// Delete last record
+		if err := db.Delete([]byte("key3")); err != nil {
+			t.Fatalf("Error deleting key3: %v", err)
+		}
+
+		// Get file size after delete
+		info, _ = os.Stat(testFile)
+		sizeAfter := info.Size()
+
+		// File should be smaller (truncated)
+		if sizeAfter >= sizeBefore {
+			t.Errorf("File should have been truncated: before=%d, after=%d", sizeBefore, sizeAfter)
+		}
+
+		// Free space list should be empty (no wasted space)
+		db.mu.RLock()
+		freeCount := len(db.freeSpace)
+		db.mu.RUnlock()
+
+		if freeCount != 0 {
+			t.Errorf("Expected 0 free spaces after truncation, got %d", freeCount)
+		}
+
+		// Verify remaining keys work
+		_, err := db.Get([]byte("key1"))
+		if err != nil {
+			t.Errorf("key1 should still be accessible: %v", err)
+		}
+		_, err = db.Get([]byte("key2"))
+		if err != nil {
+			t.Errorf("key2 should still be accessible: %v", err)
+		}
+	})
+
+	// Test 2: Delete multiple consecutive records at end
+	t.Run("DeleteMultipleAtEnd", func(t *testing.T) {
+		testFile2 := "test_delete_truncate2.skv"
+		os.Remove(testFile2)
+		defer os.Remove(testFile2)
+		defer os.Remove(testFile2 + ".wal")
+
+		db2, _ := Open(testFile2)
+		defer db2.Close()
+
+		db2.Put([]byte("a"), bytes.Repeat([]byte("1"), 50))
+		db2.Put([]byte("b"), bytes.Repeat([]byte("2"), 50))
+		db2.Put([]byte("c"), bytes.Repeat([]byte("3"), 50))
+		db2.Put([]byte("d"), bytes.Repeat([]byte("4"), 50))
+
+		info, _ := os.Stat(testFile2)
+		sizeWithAll := info.Size()
+
+		// Delete last two records (in reverse order)
+		db2.Delete([]byte("d"))
+		db2.Delete([]byte("c"))
+
+		info, _ = os.Stat(testFile2)
+		sizeAfterDelete := info.Size()
+
+		// File should be significantly smaller
+		if sizeAfterDelete >= sizeWithAll-50 {
+			t.Errorf("File should have been truncated significantly: before=%d, after=%d", sizeWithAll, sizeAfterDelete)
+		}
+
+		db2.mu.RLock()
+		freeCount := len(db2.freeSpace)
+		db2.mu.RUnlock()
+
+		if freeCount != 0 {
+			t.Errorf("Expected 0 free spaces, got %d", freeCount)
+		}
+	})
+
+	// Test 3: Delete middle record, then delete last - should coalesce and truncate
+	t.Run("CoalesceAndTruncate", func(t *testing.T) {
+		testFile3 := "test_delete_truncate3.skv"
+		os.Remove(testFile3)
+		defer os.Remove(testFile3)
+		defer os.Remove(testFile3 + ".wal")
+
+		db3, _ := Open(testFile3)
+		defer db3.Close()
+
+		db3.Put([]byte("x"), bytes.Repeat([]byte("X"), 50))
+		db3.Put([]byte("y"), bytes.Repeat([]byte("Y"), 50))
+		db3.Put([]byte("z"), bytes.Repeat([]byte("Z"), 50))
+
+		// Delete middle record first (creates free space)
+		db3.Delete([]byte("y"))
+
+		db3.mu.RLock()
+		freeCountAfterY := len(db3.freeSpace)
+		db3.mu.RUnlock()
+
+		if freeCountAfterY != 1 {
+			t.Errorf("Expected 1 free space after deleting y, got %d", freeCountAfterY)
+		}
+
+		info, _ := os.Stat(testFile3)
+		sizeAfterY := info.Size()
+
+		// Delete last record - should coalesce with y and truncate
+		db3.Delete([]byte("z"))
+
+		info, _ = os.Stat(testFile3)
+		sizeAfterZ := info.Size()
+
+		// File should be truncated (smaller than before)
+		if sizeAfterZ >= sizeAfterY {
+			t.Errorf("File should have been truncated after coalescing: before=%d, after=%d", sizeAfterY, sizeAfterZ)
+		}
+
+		db3.mu.RLock()
+		freeCountFinal := len(db3.freeSpace)
+		db3.mu.RUnlock()
+
+		// Free space should be 0 after truncation
+		if freeCountFinal != 0 {
+			t.Errorf("Expected 0 free spaces after truncation, got %d", freeCountFinal)
+		}
+
+		// Only x should remain
+		_, err := db3.Get([]byte("x"))
+		if err != nil {
+			t.Errorf("x should still be accessible: %v", err)
+		}
+	})
 }

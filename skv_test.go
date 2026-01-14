@@ -547,21 +547,26 @@ func TestVerify(t *testing.T) {
 		t.Errorf("Expected 1 deleted record, got: %d", stats.DeletedRecords)
 	}
 
-	// Test 4: Update a key (stored at the end)
+	// Test 4: Update a key
+	// With free space coalescing, the old key1 is deleted and coalesces with the
+	// already-deleted key2 space. The new key1 is written to the coalesced space,
+	// overwriting the deleted records. So we end up with fewer records on disk.
 	db.Update([]byte("key1"), []byte("value1_new"))
 
 	stats, err = db.Verify()
 	if err != nil {
 		t.Fatalf("Error verifying after update: %v", err)
 	}
-	if stats.TotalRecords != 4 {
-		t.Errorf("Expected 4 total records, got: %d", stats.TotalRecords)
+	// After coalescing and reuse: key1_new + key3 = 2 active records
+	// The deleted records (old key1 and key2) were overwritten by the new key1
+	if stats.TotalRecords != 2 {
+		t.Errorf("Expected 2 total records (after coalescing), got: %d", stats.TotalRecords)
 	}
 	if stats.ActiveRecords != 2 {
 		t.Errorf("Expected 2 active records, got: %d", stats.ActiveRecords)
 	}
-	if stats.DeletedRecords != 2 {
-		t.Errorf("Expected 2 deleted records, got: %d", stats.DeletedRecords)
+	if stats.DeletedRecords != 0 {
+		t.Errorf("Expected 0 deleted records (overwritten by reuse), got: %d", stats.DeletedRecords)
 	}
 }
 
@@ -592,21 +597,22 @@ func TestVerifyWithDifferentTypes(t *testing.T) {
 		t.Errorf("Expected 3 active records, got: %d", stats.ActiveRecords)
 	}
 
-	// Delete a large record
+	// Delete a large record (type4 is at end, will be truncated)
 	db.Delete([]byte("type4"))
 
 	stats, err = db.Verify()
 	if err != nil {
 		t.Fatalf("Error verifying after delete: %v", err)
 	}
-	if stats.TotalRecords != 3 {
-		t.Errorf("Expected 3 total records, got: %d", stats.TotalRecords)
+	// type4 was at end of file and got truncated
+	if stats.TotalRecords != 2 {
+		t.Errorf("Expected 2 total records (type4 truncated), got: %d", stats.TotalRecords)
 	}
 	if stats.ActiveRecords != 2 {
 		t.Errorf("Expected 2 active records, got: %d", stats.ActiveRecords)
 	}
-	if stats.DeletedRecords != 1 {
-		t.Errorf("Expected 1 deleted record, got: %d", stats.DeletedRecords)
+	if stats.DeletedRecords != 0 {
+		t.Errorf("Expected 0 deleted records (truncated), got: %d", stats.DeletedRecords)
 	}
 }
 
@@ -641,22 +647,25 @@ func TestCompact(t *testing.T) {
 	db.Put([]byte("key4"), []byte("value4"))
 
 	// Delete some keys
+	// key2 is in the middle (will stay as deleted)
+	// key4 is at the end (will be truncated)
 	db.Delete([]byte("key2"))
 	db.Delete([]byte("key4"))
 
 	// Verify before compact
+	// key4 was truncated, key2 remains as deleted
 	stats, err = db.Verify()
 	if err != nil {
 		t.Fatalf("Error verifying before compact: %v", err)
 	}
-	if stats.TotalRecords != 4 {
-		t.Errorf("Expected 4 total records before compact, got: %d", stats.TotalRecords)
+	if stats.TotalRecords != 3 {
+		t.Errorf("Expected 3 total records before compact (key4 truncated), got: %d", stats.TotalRecords)
 	}
 	if stats.ActiveRecords != 2 {
 		t.Errorf("Expected 2 active records before compact, got: %d", stats.ActiveRecords)
 	}
-	if stats.DeletedRecords != 2 {
-		t.Errorf("Expected 2 deleted records before compact, got: %d", stats.DeletedRecords)
+	if stats.DeletedRecords != 1 {
+		t.Errorf("Expected 1 deleted record before compact (key2), got: %d", stats.DeletedRecords)
 	}
 
 	// Compact
@@ -720,25 +729,25 @@ func TestCompactWithUpdates(t *testing.T) {
 	defer db.Close()
 
 	// Add a key, update it with progressively larger values
-	// This ensures new records are created (old space too small to reuse)
+	// With truncation: each update deletes the old record at end and writes new at end
+	// So only the latest record remains
 	db.Put([]byte("key1"), []byte("v1"))
 	db.Update([]byte("key1"), []byte("value2-much-longer"))
 	db.Update([]byte("key1"), []byte("value3-even-longer-than-before"))
 
-	// Before compact, there should be 3 records (2 deleted + 1 current)
-	// because each update creates a new record (old space is too small)
+	// Before compact: with truncation, only 1 record remains (each update truncates the previous)
 	stats, err := db.Verify()
 	if err != nil {
 		t.Fatalf("Error verifying before compact: %v", err)
 	}
-	if stats.TotalRecords != 3 {
-		t.Errorf("Expected 3 total records before compact, got: %d", stats.TotalRecords)
+	if stats.TotalRecords != 1 {
+		t.Errorf("Expected 1 total record before compact (old records truncated), got: %d", stats.TotalRecords)
 	}
 	if stats.ActiveRecords != 1 {
 		t.Errorf("Expected 1 active record before compact, got: %d", stats.ActiveRecords)
 	}
-	if stats.DeletedRecords != 2 {
-		t.Errorf("Expected 2 deleted records before compact, got: %d", stats.DeletedRecords)
+	if stats.DeletedRecords != 0 {
+		t.Errorf("Expected 0 deleted records before compact (truncated), got: %d", stats.DeletedRecords)
 	}
 
 	// Compact

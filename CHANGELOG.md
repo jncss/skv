@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-01-14
+
+### Added
+- **Free Space Coalescing**: Adjacent deleted records are automatically merged into single free space blocks
+- **File Truncation on Delete**: Deleted records at end of file trigger automatic file truncation
+- **WAL Auto-Cleanup**: WAL file is automatically removed on clean shutdown if empty
+- New internal functions: `findAdjacentFreeSpaces()`, `coalesceFreeSpaces()`
+
+### Changed
+- **Delete behavior**: Now coalesces with adjacent free spaces for better space reuse
+- **File efficiency**: Files automatically shrink when deleting end records
+- **WAL.Close()**: Now removes empty WAL files (only header remaining)
+
+### Improved
+- Space reuse efficiency with larger coalesced free blocks
+- Reduced file fragmentation
+- Cleaner file system after database closure (no leftover .wal files)
+
 ## [0.7.0] - 2025-12-09
 
 ### Changed

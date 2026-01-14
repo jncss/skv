@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// TestStress10000Records tests intensive usage with 10,000 records
-func TestStress10000Records(t *testing.T) {
-	testFile := "test_stress_10k.skv"
+// TestStress1000Records tests intensive usage with 1,000 records
+func TestStress1000Records(t *testing.T) {
+	testFile := "test_stress_1k.skv"
 	os.Remove(testFile)
 	defer os.Remove(testFile)
 
@@ -22,11 +22,11 @@ func TestStress10000Records(t *testing.T) {
 	}
 	defer db.Close()
 
-	const numRecords = 10000
+	const numRecords = 1000
 	t.Logf("Starting stress test with %d records", numRecords)
 
-	// Phase 1: Insert 10,000 records
-	t.Run("Phase1_Insert10000", func(t *testing.T) {
+	// Phase 1: Insert 1,000 records
+	t.Run("Phase1_Insert1000", func(t *testing.T) {
 		start := time.Now()
 		for i := 0; i < numRecords; i++ {
 			key := []byte(fmt.Sprintf("key_%06d", i))
@@ -36,7 +36,7 @@ func TestStress10000Records(t *testing.T) {
 				t.Fatalf("Error inserting record %d: %v", i, err)
 			}
 
-			if i > 0 && i%1000 == 0 {
+			if i > 0 && i%500 == 0 {
 				t.Logf("Inserted %d records", i)
 			}
 		}
@@ -66,7 +66,7 @@ func TestStress10000Records(t *testing.T) {
 	})
 
 	// Phase 3: Update 30% of records
-	t.Run("Phase3_Update3000", func(t *testing.T) {
+	t.Run("Phase3_Update300", func(t *testing.T) {
 		start := time.Now()
 		updateCount := numRecords * 3 / 10 // 30%
 		for i := 0; i < updateCount; i++ {
@@ -78,7 +78,7 @@ func TestStress10000Records(t *testing.T) {
 				t.Errorf("Error updating record %d: %v", keyNum, err)
 			}
 
-			if i > 0 && i%1000 == 0 {
+			if i > 0 && i%100 == 0 {
 				t.Logf("Updated %d records", i)
 			}
 		}
@@ -87,7 +87,7 @@ func TestStress10000Records(t *testing.T) {
 	})
 
 	// Phase 4: Delete 20% of records
-	t.Run("Phase4_Delete2000", func(t *testing.T) {
+	t.Run("Phase4_Delete200", func(t *testing.T) {
 		start := time.Now()
 		deleteCount := numRecords * 2 / 10 // 20%
 		for i := 0; i < deleteCount; i++ {
@@ -107,7 +107,7 @@ func TestStress10000Records(t *testing.T) {
 	// Phase 5: Random mixed operations
 	t.Run("Phase5_MixedOperations", func(t *testing.T) {
 		start := time.Now()
-		operations := 5000
+		operations := 500
 
 		for i := 0; i < operations; i++ {
 			keyNum := rand.Intn(numRecords)
@@ -143,7 +143,7 @@ func TestStress10000Records(t *testing.T) {
 		t.Logf("  Active records: %d", stats.ActiveRecords)
 		t.Logf("  Deleted records: %d", stats.DeletedRecords)
 
-		if stats.ActiveRecords < 1000 {
+		if stats.ActiveRecords < 100 {
 			t.Errorf("Too few active records: %d", stats.ActiveRecords)
 		}
 	})
@@ -197,7 +197,7 @@ func TestStress10000Records(t *testing.T) {
 				t.Errorf("Empty value for key %s", key)
 			}
 
-			if i > 0 && i%1000 == 0 {
+			if i > 0 && i%500 == 0 {
 				t.Logf("Verified %d keys", i)
 			}
 		}

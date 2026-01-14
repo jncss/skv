@@ -149,8 +149,12 @@ func TestCloseNormal(t *testing.T) {
 		t.Fatalf("Error opening database: %v", err)
 	}
 
+	// Add two keys - delete the first one (second one acts as keeper to prevent truncation)
 	if err := db.Put([]byte("key1"), []byte("value1")); err != nil {
 		t.Fatalf("Error putting key1: %v", err)
+	}
+	if err := db.Put([]byte("keeper"), []byte("keep")); err != nil {
+		t.Fatalf("Error putting keeper: %v", err)
 	}
 	if err := db.Delete([]byte("key1")); err != nil {
 		t.Fatalf("Error deleting key1: %v", err)
@@ -173,10 +177,10 @@ func TestCloseNormal(t *testing.T) {
 		t.Fatalf("Error verifying: %v", err)
 	}
 
-	// Normal close should keep deleted records
-	// 1 put + delete marks it as deleted = 1 total record (marked as deleted)
-	if stats.TotalRecords != 1 {
-		t.Errorf("Expected 1 total record (not compacted), got: %d", stats.TotalRecords)
+	// Normal close should keep deleted records (when not at end of file)
+	// key1 (deleted) + keeper = 2 total records, 1 deleted
+	if stats.TotalRecords != 2 {
+		t.Errorf("Expected 2 total records (not compacted), got: %d", stats.TotalRecords)
 	}
 	if stats.DeletedRecords != 1 {
 		t.Errorf("Expected 1 deleted record (not compacted), got: %d", stats.DeletedRecords)

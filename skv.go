@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -22,7 +23,7 @@ const (
 	HeaderMagic  = "SKV" // Magic bytes to identify SKV files
 	HeaderSize   = 6     // Total header size: 3 bytes magic + 3 bytes version
 	VersionMajor = 0     // Major version number
-	VersionMinor = 7     // Minor version number
+	VersionMinor = 8     // Minor version number
 	VersionPatch = 0     // Patch version number
 )
 
@@ -246,6 +247,91 @@ func (s *SKV) findBestFreeSpace(neededSize uint64) int {
 	}
 
 	return bestIdx
+}
+
+// findAdjacentFreeSpaces finds free spaces that are adjacent to the given position and size
+// Returns the indices of previous and next adjacent free spaces (-1 if not found)
+func (s *SKV) findAdjacentFreeSpaces(position int64, size uint64) (prevIdx, nextIdx int) {
+	prevIdx = -1
+	nextIdx = -1
+	endPosition := position + int64(size)
+
+	for i, free := range s.freeSpace {
+		freeEnd := free.position + int64(free.size)
+
+		// Check if this free space ends exactly where our position starts
+		if freeEnd == position {
+			prevIdx = i
+		}
+
+		// Check if this free space starts exactly where our record ends
+		if free.position == endPosition {
+			nextIdx = i
+		}
+	}
+
+	return prevIdx, nextIdx
+}
+
+// coalesceFreeSpaces merges adjacent free spaces into a single free space
+// and adds the result to the freeSpace list
+// If the resulting free space extends to the end of the file, truncate the file instead
+func (s *SKV) coalesceFreeSpaces(position int64, size uint64) {
+	prevIdx, nextIdx := s.findAdjacentFreeSpaces(position, size)
+
+	// Calculate the merged free space
+	mergedPosition := position
+	mergedSize := size
+
+	// Track indices to remove (we need to remove from highest to lowest to avoid index shifting)
+	indicesToRemove := []int{}
+
+	// Merge with previous free space if found
+	if prevIdx >= 0 {
+		prev := s.freeSpace[prevIdx]
+		mergedPosition = prev.position
+		mergedSize += prev.size
+		indicesToRemove = append(indicesToRemove, prevIdx)
+	}
+
+	// Merge with next free space if found
+	if nextIdx >= 0 {
+		next := s.freeSpace[nextIdx]
+		mergedSize += next.size
+		indicesToRemove = append(indicesToRemove, nextIdx)
+	}
+
+	// Remove old free spaces (remove from highest index first to avoid shifting issues)
+	sort.Sort(sort.Reverse(sort.IntSlice(indicesToRemove)))
+	for _, idx := range indicesToRemove {
+		s.freeSpace = append(s.freeSpace[:idx], s.freeSpace[idx+1:]...)
+	}
+
+	// Check if the merged free space extends to the end of the file
+	fileInfo, err := s.file.Stat()
+	if err == nil {
+		fileSize := fileInfo.Size()
+		mergedEnd := mergedPosition + int64(mergedSize)
+
+		if mergedEnd >= fileSize {
+			// Free space is at the end of the file - truncate instead of keeping as free space
+			if err := s.file.Truncate(mergedPosition); err == nil {
+				if err := s.file.Sync(); err == nil {
+					s.logger.Debug("Truncated file after delete",
+						Field{Key: "new_size", Value: mergedPosition},
+						Field{Key: "freed_bytes", Value: mergedSize})
+					return // Don't add to freeSpace list
+				}
+			}
+			// If truncate fails, fall through and add to freeSpace list
+		}
+	}
+
+	// Add the merged free space
+	s.freeSpace = append(s.freeSpace, FreeSpace{
+		position: mergedPosition,
+		size:     mergedSize,
+	})
 }
 
 // FreeSpace represents a deleted record that can be reused
@@ -583,14 +669,14 @@ func (s *SKV) applyWALOperation(entry WALEntry) error {
 	return nil
 }
 
-// Close closes the database file
+// Close closes the database file and removes the WAL file if it's empty
 func (s *SKV) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var closeErr error
 
-	// Close WAL first
+	// Close WAL (removes file if empty)
 	if s.wal != nil {
 		if err := s.wal.Close(); err != nil {
 			closeErr = fmt.Errorf("error closing WAL: %w", err)
@@ -633,7 +719,7 @@ func (s *SKV) CloseWithCompact() error {
 		return fmt.Errorf("error compacting before close: %w", err)
 	}
 
-	// Close WAL
+	// Close WAL (removes file if empty)
 	var closeErr error
 	if s.wal != nil {
 		if err := s.wal.Close(); err != nil {
@@ -1448,12 +1534,11 @@ func (s *SKV) rebuildCache() error {
 				return err
 			}
 
-			// Add to free space list (record + padding)
+			// Total free size includes record + padding
 			totalFreeSize := recordSize + uint64(postPaddingSize)
-			s.freeSpace = append(s.freeSpace, FreeSpace{
-				position: currentPos,
-				size:     totalFreeSize,
-			})
+
+			// Coalesce with adjacent free spaces
+			s.coalesceFreeSpaces(currentPos, totalFreeSize)
 		} else {
 			// Add or update in cache (currentPos is already after padding)
 			s.cache[keyStr] = currentPos
@@ -1653,12 +1738,11 @@ func (s *SKV) deleteInternal(key []byte) error {
 		return fmt.Errorf("error checking padding: %w", err)
 	}
 
-	// Add to free space list (record + any trailing padding)
+	// Total free size includes record + any trailing padding
 	totalFreeSize := recordSize + uint64(paddingSize)
-	s.freeSpace = append(s.freeSpace, FreeSpace{
-		position: position,
-		size:     totalFreeSize,
-	})
+
+	// Coalesce with adjacent free spaces (previous and next deleted records)
+	s.coalesceFreeSpaces(position, totalFreeSize)
 
 	return nil
 }

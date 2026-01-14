@@ -464,14 +464,45 @@ func (w *WAL) Truncate() error {
 	return w.file.Sync()
 }
 
-// Close closes the WAL file
+// Close closes the WAL file and removes it if empty (only header)
+// This is safe because an empty WAL means all operations were committed
 func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if w.file != nil {
+	if w.file == nil {
+		return nil
+	}
+
+	// Check if WAL is empty (only header)
+	info, err := w.file.Stat()
+	if err != nil {
+		// If we can't stat, just close without removing
 		return w.file.Close()
 	}
+
+	filePath := w.filePath
+	isEmpty := info.Size() <= WALHeaderSize
+
+	// Close the file first
+	if err := w.file.Close(); err != nil {
+		return err
+	}
+	w.file = nil
+
+	// Remove if empty (no pending operations)
+	if isEmpty {
+		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+			// Log but don't fail - the WAL was properly closed
+			w.logger.Debug("Failed to remove empty WAL file",
+				Field{Key: "path", Value: filePath},
+				Field{Key: "error", Value: err.Error()})
+		} else {
+			w.logger.Debug("Removed empty WAL file",
+				Field{Key: "path", Value: filePath})
+		}
+	}
+
 	return nil
 }
 
